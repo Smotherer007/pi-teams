@@ -5,11 +5,13 @@ on:
     branches:
       - main
       - next
+  workflow_dispatch:
 
 permissions:
   contents: write
   issues: write
   pull-requests: write
+  id-token: write
 
 jobs:
   release:
