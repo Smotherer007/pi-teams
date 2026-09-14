@@ -13,6 +13,7 @@ import {
 	chatsToExamine,
 	createWatchState,
 	isFromMe,
+	isUnread,
 	isWatchedChat,
 	isWatchedSender,
 	mentionsMe,
@@ -173,28 +174,61 @@ describe("shouldWake", () => {
 	});
 });
 
+describe("isUnread", () => {
+	test("compares the newest message against the user's read cursor", () => {
+		const moved = chat({ lastUpdated: "2026-09-14T15:00:35.103Z" });
+		assert.equal(isUnread(moved, "2026-09-14T14:55:57.835Z"), true);
+		assert.equal(isUnread(moved, "2026-09-14T15:00:35.103Z"), false);
+		assert.equal(isUnread(moved, "2026-09-14T16:00:00.000Z"), false);
+	});
+
+	test("answers rather than guesses when the read state is missing", () => {
+		// A read state we cannot read must not switch listen mode off silently.
+		assert.equal(isUnread(chat(), undefined), true);
+		assert.equal(isUnread(chat(), "not a date"), true);
+	});
+
+	test("a chat the chat list cannot date is never unread", () => {
+		assert.equal(isUnread(chat({ lastUpdated: undefined }), undefined), false);
+	});
+});
+
 describe("chatsToExamine", () => {
 	test("skips chats whose activity marker has not moved", () => {
 		const state = createWatchState();
 		const first = chat();
 		state.seen.set(first.id, activityMarker(first));
-		assert.deepEqual(chatsToExamine(state, [first], watch(), NOW, 5 * 60_000), []);
+		assert.deepEqual(chatsToExamine(state, [first], watch()), []);
 	});
 
-	test("skips chats older than the freshness window", () => {
-		const stale = chat({ lastUpdated: new Date(NOW - 3600_000).toISOString() });
-		assert.deepEqual(chatsToExamine(createWatchState(), [stale], watch(), NOW, 5 * 60_000), []);
+	test("examines a chat that moved while pi was not running, however long ago", () => {
+		// The cursor is what makes listen mode pick up a backlog: age is not part
+		// of the test, or exactly the messages the user switched it on for would
+		// be dropped.
+		const old = chat({ lastUpdated: new Date(NOW - 30 * 24 * 3600_000).toISOString() });
+		assert.equal(chatsToExamine(createWatchState(), [old], watch()).length, 1);
 	});
 
-	test("returns a chat that just moved", () => {
+	test("examines a chat that just moved", () => {
 		const fresh = chat({ lastUpdated: new Date(NOW - 30_000).toISOString() });
-		assert.equal(chatsToExamine(createWatchState(), [fresh], watch(), NOW, 5 * 60_000).length, 1);
+		assert.equal(chatsToExamine(createWatchState(), [fresh], watch()).length, 1);
+	});
+
+	test("a restored cursor is what an empty state would have examined", () => {
+		const restored = chat({ lastUpdated: new Date(NOW - 30_000).toISOString() });
+		const state = createWatchState([[restored.id, activityMarker(restored)]]);
+		assert.deepEqual(chatsToExamine(state, [restored], watch()), []);
+	});
+
+	test("a chat the chat list cannot date is never a candidate", () => {
+		const undated = chat({ lastUpdated: undefined });
+		assert.deepEqual(chatsToExamine(createWatchState(), [undated], watch()), []);
 	});
 
 	test("respects the chat filter", () => {
 		const fresh = chat({ lastUpdated: new Date(NOW - 30_000).toISOString() });
 		const narrowed = watch({ chats: ["Vertrieb*"] });
-		assert.deepEqual(chatsToExamine(createWatchState(), [fresh], narrowed, NOW, 5 * 60_000), []);
+		assert.deepEqual(chatsToExamine(createWatchState(), [fresh], narrowed), []);
 	});
 });
 
@@ -213,6 +247,27 @@ describe("state bookkeeping", () => {
 		pruneState(state, NOW);
 		assert.deepEqual([...state.lastTriggered.keys()], ["recent"]);
 		assert.equal(state.triggers.length, 1);
+	});
+
+	test("pruning never drops the cursor of a quiet chat", () => {
+		// By age this would be a candidate again on the next tick, and pi would
+		// answer a message from months ago.
+		const state = createWatchState([["quiet", "2000-01-01T00:00:00.000Z"]]);
+		pruneState(state, NOW);
+		assert.equal(state.seen.get("quiet"), "2000-01-01T00:00:00.000Z");
+	});
+
+	test("the cursor is bounded by size, keeping the newest markers", () => {
+		const entries: [string, string][] = [];
+		for (let index = 0; index < 1005; index++) {
+			entries.push([`chat-${index}`, new Date(NOW - index * 1000).toISOString()]);
+		}
+		const state = createWatchState(entries);
+		pruneState(state, NOW);
+
+		assert.equal(state.seen.size, 1000);
+		assert.equal(state.seen.has("chat-0"), true);
+		assert.equal(state.seen.has("chat-1004"), false);
 	});
 });
 

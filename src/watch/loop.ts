@@ -6,6 +6,11 @@
  * rules (./index.ts) and the polling can each be tested on their own, and the
  * extension stays the only place that touches the session.
  *
+ * The watcher's memory of what it has already looked at does not live in this
+ * process — it is read at startup and written back after every tick, so a
+ * restart picks up exactly the messages that arrived while pi was not running.
+ * See ./cursor.ts for why, and ./index.ts for what counts as "worth a look".
+ *
  * Why polling and not a webhook: Microsoft Graph change notifications for chats
  * need a publicly reachable HTTPS endpoint plus subscription renewal, which a
  * laptop on a home network cannot offer. Polling costs one `/me/chats` call per
@@ -14,7 +19,7 @@
 
 import type { ChatSummary, MessageSummary, SignedInUser } from "../types.ts";
 import type { ResolvedWatchConfig, TeamsConnection } from "../config/index.ts";
-import { listChats } from "../graph/chats.ts";
+import { getChatViewpoint, listChats } from "../graph/chats.ts";
 import { listChatMessages } from "../graph/messages.ts";
 import { getMe } from "../graph/me.ts";
 import { chatCandidates } from "../graph/mappers.ts";
@@ -24,6 +29,9 @@ import {
 	activityMarker,
 	chatsToExamine,
 	createWatchState,
+	isUnread,
+	noteFailure,
+	noteSuccess,
 	noteWake,
 	pruneState,
 	shouldWake,
@@ -58,6 +66,10 @@ export interface WatchRuntimeStatus {
 	wakesThisHour: number;
 	/** Chats seen so far — a quick sanity signal that the loop is alive */
 	trackedChats: number;
+	/** How many chats had moved when the watcher came up, before the per-tick cap */
+	catchUp?: number;
+	/** Of those, how many the user had already read in Teams */
+	catchUpRead?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,55 +90,82 @@ export interface WatchTickDeps {
 	listChats: () => Promise<ChatSummary[]>;
 	/** The most recent messages of one chat, newest first */
 	listMessages: (chatId: string) => Promise<MessageSummary[]>;
+	/**
+	 * The user's read cursor for one chat (`viewpoint.lastMessageReadDateTime`).
+	 * `undefined` means Graph did not say, which is treated as unread rather than
+	 * as settled.
+	 */
+	readState: (chatId: string) => Promise<string | undefined>;
 	now: () => number;
 	/**
 	 * Read guard, so the watcher respects the same allow/deny rules as every
 	 * other read. Defaults to allowing everything.
 	 */
 	allowed?: (chat: ChatSummary) => boolean;
+	/**
+	 * Persist the cursor after the tick. The durable half of "pi has looked at
+	 * this chat": without it a restart replays what was already answered.
+	 */
+	persistCursor?: (seen: ReadonlyMap<string, string>) => void;
 }
 
 export interface WatchTickResult {
 	/** Chats looked at in this tick */
 	examined: number;
+	/** Chats that had moved, before the per-tick cap trimmed the batch */
+	pending: number;
+	/** Of the examined ones, how many the user had already read */
+	alreadyRead: number;
 	wakes: WatchEvent[];
 }
 
 /**
  * Advance the watcher by one tick.
  *
- * The first tick is a **baseline**: it records what is currently there and
- * wakes nobody. Switching listen mode on must not answer the backlog — it means
- * "from now on", and anything older than the freshness window would be a
- * surprise to wake for.
+ * Nothing here is a baseline: with a cursor restored, "moved since pi last
+ * looked" is the backlog the user switched listen mode on to catch up with, and
+ * without one every chat is compared against the user's own read state on the
+ * very first tick. What keeps that from becoming a flood is the per-tick cap
+ * and the hourly wake limit, not a window that quietly drops messages.
  */
 export async function runWatchTick(
 	deps: WatchTickDeps,
 	state: WatchState,
 	watch: ResolvedWatchConfig,
 	me: SignedInUser | undefined,
-	options: { baseline: boolean },
 ): Promise<WatchTickResult> {
 	const now = deps.now();
 	pruneState(state, now);
 
 	const chats = (await deps.listChats()).filter((chat) => deps.allowed?.(chat) ?? true);
 
-	if (options.baseline) {
-		for (const chat of chats) state.seen.set(chat.id, activityMarker(chat));
-		return { examined: 0, wakes: [] };
-	}
-
-	const freshnessMs = Math.max(5 * 60_000, watch.intervalSeconds * 2000);
-	const candidates = chatsToExamine(state, chats, watch, now, freshnessMs).slice(0, MAX_EXAMINATIONS_PER_TICK);
+	const candidates = chatsToExamine(state, chats, watch);
+	const batch = candidates.slice(0, MAX_EXAMINATIONS_PER_TICK);
 
 	const wakes: WatchEvent[] = [];
+	let alreadyRead = 0;
 
-	for (const chat of candidates) {
-		// Mark first: a chat that fails to load must not be retried forever, and
-		// the marker is the chat list's own, so the next tick sees it as moved
-		// only if something new actually arrives.
+	for (const chat of batch) {
+		// Mark first, then undo the mark if this chat cannot be examined: a chat
+		// that fails must not be retried forever, but a token renewal must not turn
+		// into a message nobody ever answers.
 		state.seen.set(chat.id, activityMarker(chat));
+
+		// The read cursor first: a chat the user has already opened in Teams ends
+		// here, one Graph call in, before the message is even fetched.
+		let readAt: string | undefined;
+		try {
+			readAt = await deps.readState(chat.id);
+		} catch {
+			if (noteFailure(state, chat.id)) state.seen.delete(chat.id);
+			continue;
+		}
+
+		if (!isUnread(chat, readAt)) {
+			noteSuccess(state, chat.id);
+			alreadyRead += 1;
+			continue;
+		}
 
 		let messages: MessageSummary[];
 		try {
@@ -134,8 +173,11 @@ export async function runWatchTick(
 		} catch {
 			// A single unreadable chat must not end the tick — the rest of the
 			// list is still worth examining.
+			if (noteFailure(state, chat.id)) state.seen.delete(chat.id);
 			continue;
 		}
+
+		noteSuccess(state, chat.id);
 
 		const message = messages.find((entry) => !entry.deletedDateTime) ?? messages[0];
 		if (!message) continue;
@@ -147,7 +189,11 @@ export async function runWatchTick(
 		wakes.push({ chat, message, wokeAt: now, me });
 	}
 
-	return { examined: candidates.length, wakes };
+	// Written even when nothing woke: marking a chat examined is the progress
+	// that must survive a restart.
+	if (batch.length > 0) deps.persistCursor?.(state.seen);
+
+	return { examined: batch.length, pending: candidates.length, alreadyRead, wakes };
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +202,14 @@ export async function runWatchTick(
 
 export interface WatchLoopOptions {
 	connection: TeamsConnection;
+	/**
+	 * The persisted cursor read at startup. `undefined` means listen mode has
+	 * never run for this account, which is the one case where the read state of
+	 * every chat is asked instead — the backlog the user switched it on for.
+	 */
+	cursor?: Map<string, string>;
+	/** Called after a tick that moved the cursor, to make it durable */
+	persistCursor?: (seen: ReadonlyMap<string, string>) => void;
 	/** Called once per wake, in arrival order */
 	onWake: (event: WatchEvent) => void;
 	/** Called when a tick fails; the loop keeps running */
@@ -206,10 +260,9 @@ export function stopActiveWatchLoop(): void {
 export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 	const { connection } = options;
 	const watch = connection.watch;
-	const state = createWatchState();
+	const state = createWatchState(options.cursor);
 
 	let stopped = false;
-	let baselineDone = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let me: SignedInUser | undefined;
 	let meResolved = false;
@@ -243,16 +296,23 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 				{
 					listChats: () => listChats(connection, { max: 50, meId: me?.id }),
 					listMessages: (chatId) => listChatMessages(connection, chatId, { max: 1 }),
+					readState: async (chatId) => (await getChatViewpoint(connection, chatId))?.lastMessageReadAt,
 					now: () => Date.now(),
 					allowed: (chat) => hasAccess(connection, "read", "chats", chatCandidates(chat)),
+					persistCursor: options.persistCursor,
 				},
 				state,
 				watch,
 				me,
-				{ baseline: !baselineDone },
 			);
 
-			baselineDone = true;
+			// Reported once, from the first tick: the number the user wants after
+			// switching listen mode on is "how much did I miss", and every later
+			// tick would only show the steady-state traffic.
+			if (status.catchUp === undefined) {
+				status.catchUp = result.pending;
+				status.catchUpRead = result.alreadyRead;
+			}
 			failureCount = 0;
 			status.lastTickAt = Date.now();
 			status.lastError = undefined;
@@ -283,8 +343,9 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 		schedule(watch.intervalSeconds * 1000 * Math.min(2 ** failureCount, 10));
 	}
 
-	// The first tick is immediate: it establishes the baseline, and a user who
-	// just switched listen mode should not wait a full interval to see it alive.
+	// The first tick is immediate: it answers what is still open since the last
+	// run, and a user who switched listen mode on should not wait a full interval
+	// to see it alive.
 	void tick();
 
 	return {

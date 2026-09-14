@@ -12,9 +12,11 @@ import {
 	getConfigPath,
 	resolveConnection,
 	setWatchConfig,
+	type TeamsConnection,
 	type WatchConfig,
 } from "../config/index.ts";
 import { getActiveWatchLoop, type WatchRuntimeStatus } from "../watch/loop.ts";
+import { getWatchCursorPath } from "../watch/cursor.ts";
 import { errorResult, run, textResult, type ToolContext, type ToolResult } from "./shared.ts";
 
 interface WatchParams {
@@ -28,6 +30,24 @@ interface WatchParams {
 	cooldownSeconds?: number;
 	maxTriggersPerHour?: number;
 }
+
+/**
+ * What the cursor means, in the status output.
+ *
+ * The single most surprising thing about listen mode is what happens when it is
+ * switched on again, so the answer is part of the status rather than only in
+ * the docs.
+ */
+const CURSOR_NOTES = [
+	"### What wakes pi",
+	"",
+	"A chat wakes pi when both are true: it has moved since pi last looked (a cursor per account, kept "
+		+ "on disk), and its newest message is still unread for you in Teams. Switching listen mode back "
+		+ "on therefore answers what you missed, and a chat you have already read in Teams stays quiet.",
+	"",
+	"A backlog is drained over several ticks and capped by the hourly wake limit, so a long absence does "
+		+ "not produce a burst of answers.",
+].join("\n");
 
 /** Renders the effective settings the same way the config file would. */
 function describe(watch: {
@@ -56,7 +76,7 @@ function describe(watch: {
  * Distinguishes "configured on" from "actually polling": after an edit to the
  * config file the two can differ until the extension picks it up.
  */
-function runtimeLines(runtime: WatchRuntimeStatus | undefined): string[] {
+function runtimeLines(runtime: WatchRuntimeStatus | undefined, conn: TeamsConnection): string[] {
 	if (!runtime) {
 		return [
 			"Nothing is polling in this session.",
@@ -79,9 +99,15 @@ function runtimeLines(runtime: WatchRuntimeStatus | undefined): string[] {
 	if (runtime.lastWakeChat) {
 		lines.push(`- last wake: ${runtime.lastWakeChat}`);
 	}
+	if (runtime.catchUp !== undefined) {
+		const read = runtime.catchUpRead ? `, ${runtime.catchUpRead} of them already read` : "";
+		lines.push(`- catch-up on start: ${runtime.catchUp} chat(s) had moved${read}`);
+	}
 	if (runtime.lastError) {
 		lines.push(`- ⚠️ last error: ${runtime.lastError}`);
 	}
+
+	lines.push(`- cursor: \`${getWatchCursorPath(conn.account, conn.tenantId)}\``);
 	return lines;
 }
 
@@ -89,6 +115,9 @@ export const teamsWatchTool = {
 	name: "teams_watch",
 	description:
 		"Control listen mode: pi polls your Teams chats and turns an incoming message into a prompt it answers. " +
+		"A chat wakes it when it has moved since pi last looked, so switching listen mode on also answers " +
+		"what arrived while pi was not running; only the very first run on an account records history " +
+		"without answering it. " +
 		"Use action 'status' to see the current settings, 'enable' or 'disable' to switch it, and the optional " +
 		"fields to narrow what may wake pi (chat patterns, mentions only, interval, cooldown, hourly limit). " +
 		"The watcher runs in the extension session; this tool changes the configuration it reads.",
@@ -135,6 +164,7 @@ export const teamsWatchTool = {
 		"Use teams_watch when the user wants pi to notice incoming Teams messages on its own.",
 		"Tell the user plainly that listen mode spends a model turn per incoming message, and that pi answers in their name.",
 		"Enabling listen mode takes effect immediately; the settings survive a restart.",
+		"Enabling listen mode answers what arrived since the last run, so say how much is waiting rather than implying only new messages count.",
 	],
 
 	async execute(
@@ -149,9 +179,9 @@ export const teamsWatchTool = {
 
 			// Reported from the resolved connection, so the answer shows what is in
 			// force for that account and tenant — not just what the file says.
-			const inspect = () => {
+			const inspect = (): TeamsConnection | undefined => {
 				try {
-					return resolveConnection(params.account, params.tenant).watch;
+					return resolveConnection(params.account, params.tenant);
 				} catch {
 					return undefined;
 				}
@@ -169,12 +199,13 @@ export const teamsWatchTool = {
 
 			switch (action) {
 				case "status": {
-					const watch = inspect();
-					if (!watch) {
+					const conn = inspect();
+					if (!conn) {
 						return errorResult(
 							`No usable Teams account for these settings. Check ${getConfigPath()}.`,
 						);
 					}
+					const watch = conn.watch;
 					const loop = getActiveWatchLoop();
 					const runtime = loop?.status();
 					return textResult(
@@ -183,7 +214,9 @@ export const teamsWatchTool = {
 							"",
 							describe(watch),
 							"",
-							...runtimeLines(runtime),
+							...runtimeLines(runtime, conn),
+							"",
+							...CURSOR_NOTES,
 						].join("\n"),
 						{ watch, runtime },
 					);
@@ -197,9 +230,10 @@ export const teamsWatchTool = {
 							"",
 							describe(watch),
 							"",
-							"pi now polls these chats and treats a new message as a prompt. It answers in your name " +
-								"and under the safety level in force, so anything it decides to send still follows the " +
-								"usual confirmation rules.",
+							"pi now polls these chats and treats anything that has moved since its last look as a prompt — " +
+								"including what arrived while it was not running, so the first tick may answer several messages. " +
+								"It answers in your name and under the safety level in force, so anything it decides to send " +
+								"still follows the usual confirmation rules.",
 							"",
 							`Written to ${getConfigPath()}.`,
 						].join("\n"),

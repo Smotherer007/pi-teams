@@ -9,6 +9,12 @@
  *
  * Two things are deliberately not pure: the clock and the fetch. Both are
  * injected, which is what makes the decision rules testable without a tenant.
+ *
+ * `seen` is the durable cursor (see ./cursor.ts): a chat whose marker differs
+ * from the stored one has moved since pi last looked, and `isUnread` then says
+ * whether the user has already opened it in Teams. That pair is what makes
+ * switching listen mode back on answer exactly the messages that are still open
+ * — including the ones that arrived while pi was not running.
  */
 
 import type { ChatSummary, MessageSummary, PersonRef, SignedInUser } from "../types.ts";
@@ -24,26 +30,71 @@ import { chatCandidates } from "../graph/mappers.ts";
  * What the watcher remembers between ticks.
  *
  * `seen` is keyed by chat and holds the activity marker of the last message we
- * looked at, so a tick can skip every chat that has not moved. It is a
- * high-water mark, not a read receipt: nothing here is ever sent to Teams.
+ * looked at, so a tick can skip every chat that has not moved. It survives the
+ * session on disk, which is what turns "new since the last poll" into "new
+ * since pi last looked". It is a high-water mark, not a read receipt: nothing
+ * here is ever sent to Teams.
  */
 export interface WatchState {
-	/** chatId → activity marker of the last examined message */
+	/** chatId → activity marker of the last examined message, restored from disk */
 	seen: Map<string, string>;
+	/**
+	 * chatId → how often examining it has failed in a row.
+	 *
+	 * The cursor is written before the chat is examined, which is what keeps a
+	 * broken chat from being retried forever — but on its own it would also turn
+	 * a token renewal or a throttle into a message that is never answered. So a
+	 * failure un-marks the chat again, up to MAX_CHAT_ATTEMPTS.
+	 */
+	attempts: Map<string, number>;
 	/** chatId → epoch ms of the last wake in that chat */
 	lastTriggered: Map<string, number>;
 	/** epoch ms of every wake, pruned to the last hour */
 	triggers: number[];
 }
 
-export function createWatchState(): WatchState {
-	return { seen: new Map(), lastTriggered: new Map(), triggers: [] };
+/**
+ * How often one chat may fail before pi stops trying and moves on.
+ *
+ * Three is enough to ride out a token renewal and a throttling window, and few
+ * enough that a chat Graph will never serve does not occupy a batch slot on
+ * every tick.
+ */
+export const MAX_CHAT_ATTEMPTS = 3;
+
+/**
+ * @param seen The persisted cursor, when this account has been watched before.
+ *   Omitted means the very first run, which is the only run that skips history.
+ */
+export function createWatchState(seen?: Iterable<[string, string]>): WatchState {
+	return { seen: new Map(seen), attempts: new Map(), lastTriggered: new Map(), triggers: [] };
+}
+
+/** Record a failed examination; true while the chat is still worth retrying. */
+export function noteFailure(state: WatchState, chatId: string): boolean {
+	const attempts = (state.attempts.get(chatId) ?? 0) + 1;
+	state.attempts.set(chatId, attempts);
+	return attempts < MAX_CHAT_ATTEMPTS;
+}
+
+/** Forget the failure count of a chat that was examined successfully. */
+export function noteSuccess(state: WatchState, chatId: string): void {
+	state.attempts.delete(chatId);
 }
 
 /** Marker for "this is the newest state of that chat we have looked at". */
 export function activityMarker(chat: ChatSummary): string {
 	return chat.lastUpdated ?? "";
 }
+
+/**
+ * Upper bound on cursor entries.
+ *
+ * A user can accumulate chats for years, and the file is read on every session
+ * start; a thousand is two orders of magnitude more than the window the watcher
+ * polls, so the bound is only ever felt by chats that are long out of sight.
+ */
+const MAX_CURSOR_ENTRIES = 1000;
 
 /** How many wakes happened within the last hour. */
 export function wakesThisHour(state: WatchState, now: number): number {
@@ -53,13 +104,30 @@ export function wakesThisHour(state: WatchState, now: number): number {
 /**
  * Drop bookkeeping that can no longer influence a decision.
  *
- * A session can run for days; without this the two maps grow with every chat
- * the user ever touches. The hour is the longest window any rule looks at.
+ * A session can run for days; without this the maps grow with every chat the
+ * user ever touches. The hour is the longest window any rule looks at.
  */
 export function pruneState(state: WatchState, now: number): void {
 	state.triggers = state.triggers.filter((at) => now - at < 3600_000);
 	for (const [chatId, at] of state.lastTriggered) {
 		if (now - at > 24 * 3600_000) state.lastTriggered.delete(chatId);
+	}
+
+	// The cursor is pruned by size, never by age. Dropping the entry of a chat
+	// that has simply been quiet for a long time would make it a candidate again
+	// and answer an old message; the count bound only ever touches chats far
+	// outside the window the chat list is read in.
+	if (state.seen.size > MAX_CURSOR_ENTRIES) {
+		const byMarker = [...state.seen.entries()].sort((a, b) => (b[1] ?? "").localeCompare(a[1] ?? ""));
+		state.seen = new Map(byMarker.slice(0, MAX_CURSOR_ENTRIES));
+	}
+
+	// Counters are bounded by size rather than by the cursor: a chat that keeps
+	// failing is deliberately *not* in the cursor, and its counter is what stops
+	// it from being retried forever.
+	if (state.attempts.size > MAX_CURSOR_ENTRIES) {
+		const overflow = state.attempts.size - MAX_CURSOR_ENTRIES;
+		for (const chatId of [...state.attempts.keys()].slice(0, overflow)) state.attempts.delete(chatId);
 	}
 }
 
@@ -71,28 +139,26 @@ export function pruneState(state: WatchState, now: number): void {
  * Chats that are both allowed by the watch filter and have moved since we last
  * looked.
  *
- * @param freshnessMs How far back "new" reaches. Enabling listen mode must not
- *   wake pi for every conversation that happened to be active this morning, so
- *   anything older than the window is recorded as seen and then ignored.
+ * Two questions are asked in sequence and they are deliberately different:
+ * "has this chat moved since pi last examined it?" is this function, and "does
+ * the user still need to see it?" is `isUnread`, which needs one Graph call per
+ * chat and therefore lives in the loop. Age is part of neither: a message that
+ * is still unread is still open, whether it arrived a minute or a week ago.
  */
 export function chatsToExamine(
 	state: WatchState,
 	chats: ChatSummary[],
 	watch: ResolvedWatchConfig,
-	now: number,
-	freshnessMs: number,
 ): ChatSummary[] {
-	const cutoff = now - freshnessMs;
-
 	return chats.filter((chat) => {
 		if (!isWatchedChat(chat, watch)) return false;
-		if (state.seen.get(chat.id) === activityMarker(chat)) return false;
 
-		const updated = chat.lastUpdated ? new Date(chat.lastUpdated).getTime() : 0;
-		// A chat with no activity timestamp cannot be dated, so it is never new.
-		if (!updated || updated < cutoff) return false;
+		const marker = activityMarker(chat);
+		// A chat the chat list cannot date has nothing to compare, so it is never
+		// "new" — and never marked, which costs no Graph call at all.
+		if (!marker) return false;
 
-		return true;
+		return state.seen.get(chat.id) !== marker;
 	});
 }
 
@@ -134,6 +200,28 @@ export type WakeDecision = { wake: true } | { wake: false; reason: string };
 
 const WAKE: WakeDecision = { wake: true };
 const skip = (reason: string): WakeDecision => ({ wake: false, reason });
+
+/**
+ * Is the newest message in this chat still unread for the user?
+ *
+ * This is the Teams read cursor talking, not pi's own memory: a message the
+ * user already opened in Teams does not need an answer from pi, and a message
+ * that is still unread does — even if it arrived days ago while pi was not
+ * running. Graph withholds the read time for some chat shapes, and a chat we
+ * cannot date is not "new" at all; both fall back to answering, because a read
+ * state we cannot read must not silently switch listen mode off.
+ */
+export function isUnread(chat: ChatSummary, lastMessageReadAt?: string): boolean {
+	const marker = activityMarker(chat);
+	if (!marker) return false;
+	if (!lastMessageReadAt) return true;
+
+	const read = new Date(lastMessageReadAt).getTime();
+	const moved = new Date(marker).getTime();
+	if (!Number.isFinite(read) || !Number.isFinite(moved)) return true;
+
+	return read < moved;
+}
 
 /**
  * Should this message wake pi?

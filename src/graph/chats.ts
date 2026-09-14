@@ -71,6 +71,47 @@ export async function getChat(
 }
 
 /**
+ * The signed-in user's own view of one chat.
+ *
+ * Graph returns this as `viewpoint` on the chat itself, and only for the
+ * signed-in user — it is the read cursor Teams shows as the unread badge. It
+ * cannot be `$expand`ed on the chat *list* (Graph answers "not a navigation
+ * property"), so the read state of a chat costs one extra call on that chat.
+ *
+ * Listen mode is the reason this exists: "answer what I have not read yet" is
+ * a different question from "answer what arrived since pi last looked", and
+ * only this answers the first one.
+ */
+export interface ChatViewpoint {
+	/** Chat hidden from the user's chat list */
+	isHidden?: boolean;
+	/** ISO time the user last read this chat; undefined when Graph withholds it */
+	lastMessageReadAt?: string;
+}
+
+export async function getChatViewpoint(
+	conn: TeamsConnection,
+	chatId: string,
+	options: { signal?: AbortSignal } = {},
+): Promise<ChatViewpoint | undefined> {
+	const raw = await graphGetOptional<Record<string, unknown>>(
+		conn,
+		`/chats/${encodeURIComponent(chatId)}`,
+		{ signal: options.signal },
+	);
+
+	const viewpoint = raw?.viewpoint as Record<string, unknown> | undefined;
+	if (!viewpoint) return undefined;
+
+	return {
+		isHidden: viewpoint.isHidden === true,
+		lastMessageReadAt: typeof viewpoint.lastMessageReadDateTime === "string"
+			? viewpoint.lastMessageReadDateTime
+			: undefined,
+	};
+}
+
+/**
  * Find an existing chat by label, topic or participant.
  *
  * Returns every match so the caller can refuse to act on an ambiguous one —

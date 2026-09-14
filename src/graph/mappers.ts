@@ -143,10 +143,10 @@ export function teamCandidates(team: TeamSummary): (string | undefined)[] {
  * newest message arrived minutes ago still reported a `lastUpdatedDateTime`
  * from more than a year earlier.
  *
- * Everything that dates a chat depends on this — the chat list order, the
- * inbox window, and the freshness cut-off that decides whether listen mode
- * looks at a chat at all — so a stale value here silently disabled listen mode
- * for exactly the chats people write in. `lastUpdatedDateTime` stays as the
+ * Everything that dates a chat depends on this — the chat list order, the inbox
+ * window, and the question listen mode asks first, "has this chat moved since pi
+ * last looked?" — so a stale value here silently disabled listen mode for
+ * exactly the chats people write in. `lastUpdatedDateTime` stays as the
  * fallback for chats Graph returns without a preview.
  */
 function chatActivity(raw: Raw): string | undefined {
