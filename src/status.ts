@@ -81,7 +81,12 @@ export function buildConnectionLabel(card: ConnectionCard | undefined): string {
 	if (!card.signedIn) return `Teams · ${card.account} · not signed in`;
 
 	const scope = card.tenant === card.account ? card.account : `${card.account}/${card.tenant}`;
-	const listening = card.watching ? " · 👂 listening" : "";
+	// A monochrome mark, not an emoji: the rest of the label is drawn in the
+	// terminal's own font (the ✓ included), and a colour glyph next to it looks
+	// like a different interface. ◉ reads as "live", which is what the label is
+	// saying — and it survives a terminal without emoji fonts, where 👂 would
+	// come out as tofu.
+	const listening = card.watching ? " · ◉ listening" : "";
 	return `✓ Teams · ${scope}${card.user ? ` · ${card.user}` : ""}${listening}`;
 }
 
