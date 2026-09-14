@@ -12,6 +12,7 @@ import { sendChatMessage } from "../graph/messages.ts";
 import { resolveUserId } from "../graph/me.ts";
 import { auditWrite } from "../safety/audit.ts";
 import { assertAccess } from "../safety/index.ts";
+import { applyAiFooter } from "../utils/disclosure.ts";
 import { truncate } from "../utils/formatting.ts";
 import { requireChat } from "./resolve.ts";
 import {
@@ -108,12 +109,16 @@ export const teamsSendChatMessageTool = {
 
 			const me = await currentUser(conn, signal).catch(() => undefined);
 
+			// The disclosure is added here, not asked for: what leaves the account
+			// has to carry it whether or not the model remembered.
+			const body = applyAiFooter(params.body, conn.aiFooter, { html: params.html });
+
 			try {
 				const sent = await sendChatMessage(
 					conn,
 					chat.id,
 					{
-						body: params.body,
+						body,
 						html: params.html,
 						importance: params.importance,
 						mentions,
@@ -127,14 +132,14 @@ export const teamsSendChatMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `chat:${chat.label}`,
-					summary: truncate(params.body, 200),
+					summary: truncate(body, 200),
 				});
 
 				return textResult(
 					[
 						`✅ Message sent to **${chat.label}** as ${me?.displayName ?? "you"} (${connectionLabel(conn)}).`,
 						"",
-						`> ${truncate(params.body, 300)}`,
+						`> ${truncate(body, 300)}`,
 						"",
 						`messageId: ${sent.id}`,
 					].join("\n"),
@@ -147,7 +152,7 @@ export const teamsSendChatMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `chat:${chat.label}`,
-					summary: truncate(params.body, 200),
+					summary: truncate(body, 200),
 					error: err instanceof Error ? err.message : String(err),
 				});
 				throw err;

@@ -31,6 +31,8 @@ export interface ConnectionCard {
 	watching?: boolean;
 	/** One line on what the watcher is doing, when it runs */
 	watchSummary?: string;
+	/** The AI disclosure in force, rendered as one line; undefined when off */
+	aiFooter?: string;
 }
 
 export function buildConnectionCard(
@@ -67,6 +69,9 @@ export function buildConnectionCard(
 					.filter(Boolean)
 					.join(" · ")
 			: undefined,
+		// Off is the normal state and needs no explanation; on gets the wording,
+		// because that is what every recipient is about to read.
+		aiFooter: conn.aiFooter.enabled ? `on — “${conn.aiFooter.text}”` : undefined,
 	};
 }
 
@@ -119,6 +124,7 @@ export function formatStatusText(card: ConnectionCard | undefined): string {
 	lines.push(
 		`- **Listen mode:** ${card.watching ? `on — ${card.watchSummary ?? "running"}` : "off"}`,
 	);
+	lines.push(`- **AI footer:** ${card.aiFooter ?? "off"}`);
 
 	lines.push("", "### What pi may do", "", card.permissionSummary);
 	return lines.join("\n");

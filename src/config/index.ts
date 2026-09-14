@@ -134,6 +134,27 @@ export interface ResolvedWatchConfig {
 	maxTriggersPerHour: number;
 }
 
+/**
+ * The note pi can append to everything it sends in the user's name.
+ *
+ * Off by default, and deliberately so: pi writes as the user, and a disclosure
+ * a recipient did not expect is a statement the user did not make. Where an
+ * organisation wants it — a works council, a customer, a regulated process —
+ * switching it on is a one-line change.
+ */
+export interface AiFooterConfig {
+	/** Append the note to every outgoing message (default: false) */
+	enabled?: boolean;
+	/** The note itself (default: see AI_FOOTER_DEFAULT) */
+	text?: string;
+}
+
+/** An AI footer after the cascade has been applied. */
+export interface ResolvedAiFooter {
+	enabled: boolean;
+	text: string;
+}
+
 /** A Teams identity pi can sign in as. */
 export interface AccountConfig {
 	/** Short label used in tool parameters, e.g. "work" */
@@ -164,6 +185,8 @@ export interface AccountConfig {
 	permissions?: PermissionBlock;
 	/** Listen-mode overrides for this identity */
 	watch?: WatchConfig;
+	/** AI-footer override for this identity */
+	aiFooter?: AiFooterConfig;
 	/** Additional tenants this identity reaches */
 	tenants?: TenantConfig[];
 }
@@ -181,6 +204,8 @@ export interface TeamsRootConfig {
 	permissions?: PermissionBlock;
 	/** Global listen-mode settings */
 	watch?: WatchConfig;
+	/** Append an AI note to every outgoing message (default: off) */
+	aiFooter?: AiFooterConfig;
 	/** Default page size for message listings (default: 25) */
 	maxMessages?: number;
 	/** Append every write to ~/.pi/agent/pi-teams-audit.jsonl (default: true) */
@@ -212,6 +237,8 @@ export interface TeamsConnection {
 	permissions: ResolvedPermissions;
 	/** Listen-mode settings in force for this account+tenant */
 	watch: ResolvedWatchConfig;
+	/** AI-footer settings in force for this account */
+	aiFooter: ResolvedAiFooter;
 	maxMessages: number;
 	audit: boolean;
 	graphBaseUrl: string;
@@ -267,6 +294,7 @@ const DEFAULTS = {
 	authMode: "auto" as AuthMode,
 	maxMessages: 25,
 	audit: true,
+	aiFooter: false,
 	graphBaseUrl: "https://graph.microsoft.com/v1.0",
 	authorityHost: "https://login.microsoftonline.com",
 };
@@ -287,6 +315,14 @@ export const WATCH_DEFAULTS: ResolvedWatchConfig = {
 	cooldownSeconds: 300,
 	maxTriggersPerHour: 10,
 };
+
+/**
+ * The disclosure appended to outgoing messages when `aiFooter` is on.
+ *
+ * Short, unambiguous and in the language of the package; an organisation that
+ * needs its own wording sets `aiFooter.text`.
+ */
+export const AI_FOOTER_DEFAULT = "🤖 Generated with pi (an AI agent)";
 
 const WATCH_BOUNDS = {
 	intervalSeconds: { min: 15, max: 3600 },
@@ -529,6 +565,7 @@ export function resolveConnection(
 		safetyLevel: resolveEffectiveSafetyLevel(config.safetyLevel, account, tenant),
 		permissions: resolvePermissions([config.permissions, account.permissions, tenant?.permissions]),
 		watch: resolveWatchConfig(config.watch, account),
+		aiFooter: resolveAiFooter(config.aiFooter, account.aiFooter),
 		maxMessages: config.maxMessages ?? DEFAULTS.maxMessages,
 		audit: config.audit ?? DEFAULTS.audit,
 		graphBaseUrl: (config.graphBaseUrl ?? DEFAULTS.graphBaseUrl).replace(/\/+$/, ""),
@@ -696,6 +733,28 @@ export function resolveWatchConfig(
 	};
 }
 
+/**
+ * Effective AI-footer settings: account > global > default.
+ *
+ * Field by field, like every other setting in the cascade, so an account can
+ * turn the footer on with the global wording, or keep it off with its own.
+ * Exported for tests.
+ */
+export function resolveAiFooter(
+	global: AiFooterConfig | undefined,
+	account: AiFooterConfig | undefined,
+): ResolvedAiFooter {
+	const text = account?.text ?? global?.text;
+	const trimmed = typeof text === "string" ? text.trim() : "";
+
+	return {
+		enabled: account?.enabled ?? global?.enabled ?? DEFAULTS.aiFooter,
+		// A footer configured as whitespace would silently switch the feature on
+		// and add nothing, so it falls back to the default wording instead.
+		text: trimmed.length > 0 ? trimmed : AI_FOOTER_DEFAULT,
+	};
+}
+
 function clamp(value: unknown, bounds: { min: number; max: number }, fallback: number): number {
 	const number = typeof value === "number" && Number.isFinite(value) ? value : fallback;
 	return Math.min(bounds.max, Math.max(bounds.min, Math.round(number)));
@@ -841,7 +900,8 @@ const TEMPLATE_JSON = `{
   "defaultAccount": "work",
   "safetyLevel": "confirm",
   "maxMessages": 25,
-  "audit": true
+  "audit": true,
+  "aiFooter": { "enabled": false, "text": "🤖 Generated with pi (an AI agent)" }
 }
 `;
 

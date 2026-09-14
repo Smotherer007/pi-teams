@@ -10,6 +10,7 @@ import { createChat, resolveParticipants } from "../graph/chats.ts";
 import { sendChatMessage } from "../graph/messages.ts";
 import { auditWrite } from "../safety/audit.ts";
 import { assertAccess } from "../safety/index.ts";
+import { applyAiFooter } from "../utils/disclosure.ts";
 import { truncate } from "../utils/formatting.ts";
 import {
 	AccountParam,
@@ -94,16 +95,19 @@ export const teamsCreateChatTool = {
 			const lines = [`✅ Chat with **${label}** ready.`, "", `chatId: ${chat.id}`];
 
 			if (params.message?.trim()) {
-				const sent = await sendChatMessage(conn, chat.id, { body: params.message }, signal);
+				// The first message of a new chat is a message like any other, so the
+				// disclosure applies to it too.
+				const body = applyAiFooter(params.message, conn.aiFooter);
+				const sent = await sendChatMessage(conn, chat.id, { body }, signal);
 				auditWrite(conn.audit, {
 					tool: "teams_create_chat",
 					account: conn.account,
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `chat:${label}`,
-					summary: truncate(params.message, 200),
+					summary: truncate(body, 200),
 				});
-				lines.push("", `Sent as ${me?.displayName ?? "you"}:`, "", `> ${truncate(params.message, 300)}`, "", `messageId: ${sent.id}`);
+				lines.push("", `Sent as ${me?.displayName ?? "you"}:`, "", `> ${truncate(body, 300)}`, "", `messageId: ${sent.id}`);
 			}
 
 			return textResult(lines.join("\n"), { chatId: chat.id, participants: resolved.length });

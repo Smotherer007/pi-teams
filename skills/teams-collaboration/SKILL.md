@@ -114,7 +114,11 @@ instead of trying anyway.
 ## How to write as the user
 
 - Write in **their** voice. No "As an AI…", no signature, no note that a model
-  composed it, unless they ask for one.
+  composed it, unless they ask for one. The one exception is configuration, not
+  judgement: with `aiFooter` switched on, the sending tools append the
+  disclosure themselves — do not write it into the body, or it arrives twice
+  (the tools detect it, but the user sees the text in the confirmation twice as
+  well, which looks like a mistake).
 - Match the register of the conversation you just read. A channel post and a
   quick reply to a colleague are not the same thing.
 - Show the exact text and the destination before sending whenever the request
@@ -219,6 +223,10 @@ as opening it, or re-marking it unread, in the app. Two rules:
 Channels have no equivalent: channel posts cannot be marked read or unread
 through Graph, so "mark the channel as read" is done in the Teams client.
 
+pi reads this same cursor when it decides what to answer in listen mode: a chat
+whose newest message is already read does not wake it. So marking a chat read is
+also how the user says "I have handled this, do not answer it for me".
+
 ## Correcting a message
 
 Both actions work on **chat** messages the user themselves sent, which is also
@@ -296,8 +304,13 @@ teams_watch:
   watches everything answers everything.
 - `/teams-listen on|off|status` switches it in the session; `teams_watch
   action: status` reports what is configured and what is actually running.
-- The first poll only records what is there — switching it on never answers the
-  backlog, only what arrives afterwards.
+- pi answers what is still **unread**: a chat wakes it when it has moved since
+  pi last looked (a cursor kept on disk per account) and its newest message is
+  still unread for the user in Teams. Switching listen mode back on therefore
+  answers what was missed while pi was not running; a chat the user has already
+  read in Teams stays quiet. A backlog is drained a few chats per tick, capped
+  by `maxTriggersPerHour` — so on a fresh start, say how many chats are waiting
+  rather than assuming silence means nothing happened.
 - pi never wakes for its own messages, so it cannot answer itself.
 - Listen mode does **not** bypass anything: a reply it decides to send is
   subject to the same safety level and scope rules as a reply you asked for. At

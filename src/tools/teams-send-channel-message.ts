@@ -10,6 +10,7 @@ import { Type } from "typebox";
 import { replyToChannelMessage, sendChannelMessage } from "../graph/messages.ts";
 import { resolveUserId } from "../graph/me.ts";
 import { auditWrite } from "../safety/audit.ts";
+import { applyAiFooter } from "../utils/disclosure.ts";
 import { assertAccess } from "../safety/index.ts";
 import { truncate } from "../utils/formatting.ts";
 import { requireChannel } from "./resolve.ts";
@@ -115,13 +116,16 @@ export const teamsSendChannelMessageTool = {
 
 			const me = await currentUser(conn, signal).catch(() => undefined);
 			const target = `${team.displayName}/${channel.displayName}`;
+			// The disclosure is added here, not asked for: what leaves the account
+			// has to carry it whether or not the model remembered.
+			const body = applyAiFooter(params.body, conn.aiFooter, { html: params.html });
 
 			try {
 				const sent = await sendChannelMessage(
 					conn,
 					channel,
 					{
-						body: params.body,
+						body,
 						html: params.html,
 						subject: params.subject,
 						importance: params.importance,
@@ -136,14 +140,14 @@ export const teamsSendChannelMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `channel:${target}`,
-					summary: truncate(params.body, 200),
+					summary: truncate(body, 200),
 				});
 
 				return textResult(
 					[
 						`✅ Posted in **${target}** as ${me?.displayName ?? "you"} (${connectionLabel(conn)}).`,
 						"",
-						`> ${truncate(params.body, 300)}`,
+						`> ${truncate(body, 300)}`,
 						"",
 						`messageId: ${sent.id}`,
 					].join("\n"),
@@ -156,7 +160,7 @@ export const teamsSendChannelMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `channel:${target}`,
-					summary: truncate(params.body, 200),
+					summary: truncate(body, 200),
 					error: err instanceof Error ? err.message : String(err),
 				});
 				throw err;
@@ -204,6 +208,9 @@ export const teamsReplyChannelMessageTool = {
 
 			const me = await currentUser(conn, signal).catch(() => undefined);
 			const target = `${team.displayName}/${channel.displayName}`;
+			// The disclosure is added here, not asked for: what leaves the account
+			// has to carry it whether or not the model remembered.
+			const body = applyAiFooter(params.body, conn.aiFooter, { html: params.html });
 
 			try {
 				const sent = await replyToChannelMessage(
@@ -211,7 +218,7 @@ export const teamsReplyChannelMessageTool = {
 					channel,
 					params.messageId,
 					{
-						body: params.body,
+						body,
 						html: params.html,
 						importance: params.importance,
 						mentions,
@@ -225,14 +232,14 @@ export const teamsReplyChannelMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `channel:${target}#${params.messageId}`,
-					summary: truncate(params.body, 200),
+					summary: truncate(body, 200),
 				});
 
 				return textResult(
 					[
 						`✅ Replied in **${target}** (thread ${params.messageId}) as ${me?.displayName ?? "you"}.`,
 						"",
-						`> ${truncate(params.body, 300)}`,
+						`> ${truncate(body, 300)}`,
 						"",
 						`messageId: ${sent.id}`,
 					].join("\n"),
@@ -245,7 +252,7 @@ export const teamsReplyChannelMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `channel:${target}#${params.messageId}`,
-					summary: truncate(params.body, 200),
+					summary: truncate(body, 200),
 					error: err instanceof Error ? err.message : String(err),
 				});
 				throw err;

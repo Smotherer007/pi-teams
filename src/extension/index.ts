@@ -30,6 +30,7 @@ import {
 	type WatchLoop,
 } from "../watch/loop.ts";
 import { composeWatchPrompt } from "../watch/prompt.ts";
+import { readWatchCursor, writeWatchCursor } from "../watch/cursor.ts";
 
 import { teamsSetupTool } from "../tools/teams-setup.ts";
 import { teamsLoginTool, teamsLogoutTool } from "../tools/teams-login.ts";
@@ -147,9 +148,9 @@ export default function (pi: ExtensionAPI) {
 	 * The settings the running watcher was started from.
 	 *
 	 * Used to tell a real config change from a tool that merely *read* the
-	 * settings. Restarting resets the watcher's baseline, which discards every
-	 * chat it has already looked at and swallows whatever arrived just before —
-	 * so a `teams_watch status` must not be treated like an edit.
+	 * settings. A restart only costs the polls it skipped: what has already been
+	 * looked at is on disk (see ../watch/cursor.ts), so the next tick resumes
+	 * where the last one stopped instead of losing the interval in between.
 	 */
 	let watchSignature: string | undefined;
 
@@ -173,7 +174,7 @@ export default function (pi: ExtensionAPI) {
 		const conn = refresh();
 
 		// Already watching this exact configuration: leave the loop alone, so its
-		// baseline and its cooldowns survive a look at the status.
+		// cooldowns survive a look at the status.
 		const signature = conn?.watch.enabled ? JSON.stringify(conn.watch) : undefined;
 		if (watchSignature !== undefined && signature === watchSignature && watchLoop) return;
 
@@ -184,6 +185,10 @@ export default function (pi: ExtensionAPI) {
 		reportedWatchError = undefined;
 		const loop = startWatchLoop({
 			connection: conn,
+			// Read once, here: the watch state belongs to the account+tenant, so a
+			// second account in the same session starts from its own cursor.
+			cursor: readWatchCursor(conn.account, conn.tenantId),
+			persistCursor: (seen) => writeWatchCursor(conn.account, conn.tenantId, seen),
 			onWake: (event) => {
 				pi.sendUserMessage(composeWatchPrompt(event, event.me), { deliverAs: "followUp" });
 			},
@@ -490,7 +495,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (target.safetyLevel === "confirm") {
 			const scope = target.tenant === target.account ? target.account : `${target.account}/${target.tenant}`;
-			const summary = formatMutationSummary(event.toolName, params);
+			const summary = formatMutationSummary(event.toolName, params, target.aiFooter);
 			const approved = await ctx.ui.confirm(
 				"Microsoft Teams — acting as you",
 				`${summary}\n\nAccount: ${scope}\n\nAllow this?`,

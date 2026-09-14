@@ -18,8 +18,9 @@
  * which channel a message is actually headed for.
  */
 
-import type { ResolvedAuthMode, SafetyLevel, TeamsConnection } from "../config/index.ts";
+import type { ResolvedAiFooter, ResolvedAuthMode, SafetyLevel, TeamsConnection } from "../config/index.ts";
 import { checkScope, type ScopeCategory, type ScopeMode } from "../config/scope.ts";
+import { applyAiFooter } from "../utils/disclosure.ts";
 import { ScopeDeniedError } from "../utils/errors.ts";
 import { MUTATION_TOOLS } from "../tools/tool-names.ts";
 
@@ -103,30 +104,39 @@ const APP_ONLY_FORBIDDEN = new Set<string>([
  *
  * This is the last thing a user reads before pi speaks for them, so it shows
  * the destination and the actual text — never just the tool name.
+ *
+ * The AI footer is applied here as well, for the same reason: a confirmation
+ * that shows the body without the disclosure would be a confirmation of a
+ * different message than the one that gets sent.
  */
 export function formatMutationSummary(
 	toolName: string,
 	params: Record<string, unknown>,
+	footer?: ResolvedAiFooter,
 ): string {
 	const text = (value: unknown, max = 160): string => {
 		const str = String(value ?? "").replace(/\s*\n\s*/g, " ").trim();
 		return str.length > max ? `${str.slice(0, max - 1)}…` : str;
 	};
+	const disclosed = (value: unknown): string => applyAiFooter(text(value, 400), footer);
 
 	switch (toolName) {
 		case "teams_send_chat_message":
-			return `Send a chat message to "${text(params.chat, 60)}":\n\n${text(params.body, 400)}`;
+			return `Send a chat message to "${text(params.chat, 60)}":\n\n${disclosed(params.body)}`;
 		case "teams_send_channel_message": {
 			const where = params.team ? `${text(params.team, 40)}/${text(params.channel, 40)}` : text(params.channel, 60);
-			return `Post in channel ${where}:\n\n${text(params.body, 400)}`;
+			return `Post in channel ${where}:\n\n${disclosed(params.body)}`;
 		}
 		case "teams_reply_channel_message": {
 			const where = params.team ? `${text(params.team, 40)}/${text(params.channel, 40)}` : text(params.channel, 60);
-			return `Reply in thread ${text(params.messageId, 40)} (${where}):\n\n${text(params.body, 400)}`;
+			return `Reply in thread ${text(params.messageId, 40)} (${where}):\n\n${disclosed(params.body)}`;
 		}
 		case "teams_create_chat": {
 			const people = Array.isArray(params.participants) ? params.participants.join(", ") : text(params.participants);
-			return `Create a new chat with: ${text(people, 200)}`;
+			const first = typeof params.message === "string" && params.message.trim()
+				? `\n\nFirst message:\n${disclosed(params.message)}`
+				: "";
+			return `Create a new chat with: ${text(people, 200)}${first}`;
 		}
 		case "teams_delete_message":
 			return `Delete your message ${text(params.messageId, 60)}`;
@@ -135,7 +145,7 @@ export function formatMutationSummary(
 		case "teams_mark_read":
 			return `${params.read === false ? "Mark as unread" : "Mark as read"}: chat "${text(params.chat, 60)}"`;
 		case "teams_update_message":
-			return `Edit your message ${text(params.messageId, 50)} in ${text(params.chat ?? params.channel, 60)}:\n\n${text(params.body, 400)}`;
+			return `Edit your message ${text(params.messageId, 50)} in ${text(params.chat ?? params.channel, 60)}:\n\n${disclosed(params.body)}`;
 		case "teams_chat_members":
 			return `${params.action === "remove" ? "Remove" : "Add"} ${text(params.person, 80)} ${params.action === "remove" ? "from" : "to"} the chat "${text(params.chat, 60)}"`;
 		case "teams_respond_invite":

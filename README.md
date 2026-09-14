@@ -82,8 +82,12 @@ What it does, and what it deliberately does not:
 - **Costs a model turn per wake.** That is what the filters and the hourly cap
   are for — narrow `chats` and `from`, and enable it for a handful of
   conversations rather than the whole company.
-- **Never answers the backlog.** The first poll records what is there; only what
-  arrives afterwards wakes pi.
+- **Answers what is still unread.** A chat wakes pi when two things are true: it
+  moved since pi last looked (a cursor per account, kept on disk), and its newest
+  message is still unread for you in Teams. So switching listen mode back on
+  answers what you missed while pi was not running — and a chat you already read
+  in Teams stays quiet. A backlog is drained a few chats per tick and capped by
+  `maxTriggersPerHour`, so a long absence does not produce a burst.
 - **Never wakes for its own messages.** pi posts as you, so its own reply comes
   back as "my own message" and stops the loop.
 - **Respects the read rules.** A chat excluded by `permissions.read.chats` is
@@ -352,6 +356,37 @@ teams_send_channel_message:
 Set globally, per account, or per tenant — the most specific setting wins. So
 your own company can be `confirm` while a customer tenant stays `readonly`.
 
+### AI disclosure footer
+
+Off by default. Switched on, every message, reply and edit pi sends in your name
+ends with a short note saying it was written by an AI:
+
+```json
+"aiFooter": { "enabled": true, "text": "🤖 Erstellt mit pi (KI-Assistent)" }
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `false` | append the note to everything pi sends |
+| `text` | `🤖 Generated with pi (an AI agent)` | the wording; empty means the default |
+
+Set it globally or per account (the account level wins field by field, so one
+account can use its own wording while another keeps the global one).
+
+Details worth knowing:
+
+- It is added by the tool that sends, not asked for in a prompt, so it cannot be
+  forgotten by the model. The confirmation dialog at `safetyLevel: confirm`
+  shows the text **with** the footer — you confirm what actually goes out.
+- It is idempotent: editing an already-footered message does not stack a second
+  one, and a model that copied the footer from the chat it is answering does not
+  produce two.
+- It applies to chat messages, channel posts and replies, the first message of a
+  newly created chat, and edits. It does **not** apply to things pi sends on
+  your behalf that are not messages — meeting invitations, presence changes.
+- It says nothing about the *content*: the note is a disclosure, not a
+  disclaimer, and it is the only part of an outgoing message pi adds on its own.
+
 ### Scope rules
 
 Rules exist per **category** (`teams`, `channels`, `chats`, `people`) and per
@@ -392,6 +427,7 @@ teams_permissions:
 | `maxMessages` | `25` | default page size for message listings |
 | `audit` | `true` | append every write to `~/.pi/agent/pi-teams-audit.jsonl` |
 | `scopes` | see above | override the requested Graph scopes per account/tenant |
+| `aiFooter` | off | append an AI disclosure to every message pi sends — see above |
 | `graphBaseUrl` / `authorityHost` | Microsoft public cloud | sovereign cloud endpoints |
 
 ---
@@ -548,11 +584,15 @@ teams_send_channel_message:
 | `~/.pi/agent/pi-teams.json` | accounts, tenants, safety levels, scope rules | `0600` |
 | `~/.pi/agent/pi-teams-tokens/` | one MSAL token cache per account+tenant | `0600` |
 | `~/.pi/agent/pi-teams-audit.jsonl` | one line per write: when, who, where, what | `0600` |
+| `~/.pi/agent/pi-teams-watch/` | listen mode's cursor: the newest message it has looked at per chat | `0600` |
 
 Both the config and the token cache are written through a private temp file and
-an atomic rename, so an interrupted write cannot truncate them. To revoke
-pi's access entirely, run `teams_logout` with `all: true` and remove the app's
-consent in Entra ID.
+an atomic rename, so an interrupted write cannot truncate them. The watch
+cursor is what makes listen mode survive a restart, and deleting it only costs
+one re-examination of the chats in the list — it is not silently re-answering
+anything, because the decision also asks Teams whether the message is still
+unread. To revoke pi's access entirely, run `teams_logout` with `all: true` and
+remove the app's consent in Entra ID.
 
 ## Architecture
 

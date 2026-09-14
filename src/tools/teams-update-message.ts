@@ -14,6 +14,7 @@
 import { Type } from "typebox";
 import { updateMessage } from "../graph/messages.ts";
 import { auditWrite } from "../safety/audit.ts";
+import { applyAiFooter } from "../utils/disclosure.ts";
 import { requireChat } from "./resolve.ts";
 import {
 	AccountParam,
@@ -65,8 +66,12 @@ export const teamsUpdateMessageTool = {
 			const me = await currentUser(conn, signal);
 			const chat = await requireChat(conn, params.chat, "write", signal);
 
+			// An edit replaces the whole body, so the disclosure has to survive it —
+			// idempotently, so a body that already ends with it is not doubled.
+			const body = applyAiFooter(params.body, conn.aiFooter, { html: params.html });
+
 			await updateMessage(conn, chat.id, params.messageId, me.id, {
-				body: params.body,
+				body,
 				html: params.html,
 			}, { signal });
 
@@ -76,7 +81,7 @@ export const teamsUpdateMessageTool = {
 				tenant: conn.tenant,
 				actor: me.upn,
 				target: `chat:${chat.label}`,
-				summary: `edited message ${params.messageId}: ${params.body.slice(0, 120)}`,
+				summary: `edited message ${params.messageId}: ${body.slice(0, 120)}`,
 			});
 
 			return textResult(`✅ Message ${params.messageId} edited in "${chat.label}".`, {
