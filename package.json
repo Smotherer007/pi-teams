@@ -1,6 +1,6 @@
 {
   "name": "@patimweb/pi-teams",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Microsoft Teams integration for pi coding agent — acts fully as the signed-in user across multiple accounts and tenants: chats, channels, meetings, presence, with configurable guardrails",
   "keywords": [
     "pi-package",
