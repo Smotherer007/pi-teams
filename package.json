@@ -1,0 +1,61 @@
+{
+  "name": "@patimweb/pi-teams",
+  "version": "1.0.0",
+  "description": "Microsoft Teams integration for pi coding agent — acts fully as the signed-in user across multiple accounts and tenants: chats, channels, meetings, presence, with configurable guardrails",
+  "keywords": [
+    "pi-package",
+    "microsoft-teams",
+    "teams",
+    "microsoft-graph",
+    "pi-extension"
+  ],
+  "author": "Patrick Weppelmann",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Smotherer007/pi-teams.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Smotherer007/pi-teams/issues"
+  },
+  "scripts": {
+    "build": "echo 'No build step defined'",
+    "test": "node scripts/test.mjs",
+    "test:watch": "node scripts/test.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "typebox": "^1.2.8"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.70.0",
+    "typebox": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-tui": "^0.80.3",
+    "@semantic-release/git": "^10.0.0",
+    "@types/node": "^22.0.0",
+    "semantic-release": "^25.0.0",
+    "typescript": "^5.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "image": "https://raw.githubusercontent.com/Smotherer007/pi-teams/main/screenshot.png"
+  }
+}
