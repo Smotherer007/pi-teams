@@ -135,6 +135,25 @@ export function teamCandidates(team: TeamSummary): (string | undefined)[] {
 // ---------------------------------------------------------------------------
 
 /**
+ * When did this chat last *move*?
+ *
+ * Deliberately the time of the last **message** rather than Graph's
+ * `lastUpdatedDateTime`. That field tracks chat metadata and is badly stale for
+ * 1:1 and ad-hoc group chats: measured against a live tenant, a chat whose
+ * newest message arrived minutes ago still reported a `lastUpdatedDateTime`
+ * from more than a year earlier.
+ *
+ * Everything that dates a chat depends on this — the chat list order, the
+ * inbox window, and the freshness cut-off that decides whether listen mode
+ * looks at a chat at all — so a stale value here silently disabled listen mode
+ * for exactly the chats people write in. `lastUpdatedDateTime` stays as the
+ * fallback for chats Graph returns without a preview.
+ */
+function chatActivity(raw: Raw): string | undefined {
+	return raw.lastMessagePreview?.createdDateTime ?? raw.lastUpdatedDateTime ?? undefined;
+}
+
+/**
  * Build a chat summary.
  *
  * Teams leaves 1:1 and ad-hoc group chats without a topic, so the label is
@@ -162,7 +181,7 @@ export function mapChat(raw: Raw, meId?: string): ChatSummary {
 		topic: raw.topic ?? undefined,
 		label: raw.topic || derived || raw.id || "(chat)",
 		members,
-		lastUpdated: raw.lastUpdatedDateTime ?? raw.lastMessagePreview?.createdDateTime ?? undefined,
+		lastUpdated: chatActivity(raw),
 		lastMessagePreview: preview,
 		lastMessageFrom: mapPerson(raw.lastMessagePreview?.from)?.displayName,
 		webUrl: raw.webUrl ?? undefined,
