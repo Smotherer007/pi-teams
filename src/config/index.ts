@@ -89,9 +89,54 @@ export interface TenantConfig {
 	permissions?: PermissionBlock;
 }
 
+/**
+ * Settings for "listen" mode — where pi is woken by an incoming Teams chat.
+ *
+ * Every field is optional and merges field by field down the cascade
+ * (global → account), so an interval can be set once while the chat filter is
+ * narrowed per account.
+ */
+export interface WatchConfig {
+	/** Whether the watcher runs at all (default: false) */
+	enabled?: boolean;
+	/** Seconds between polls (default: 60, minimum: 15) */
+	intervalSeconds?: number;
+	/**
+	 * Glob patterns for the chats to watch — matched against topic, label,
+	 * chat ID and participant names, exactly like the scope rules. Empty or
+	 * absent means every recent chat.
+	 */
+	chats?: string[];
+	/**
+	 * Only wake pi for messages from these people — matched against display
+	 * name, UPN and e-mail. Empty or absent means any sender.
+	 *
+	 * This is the "listen to these people" switch: `chats` decides *where* pi
+	 * listens, `from` decides *to whom*.
+	 */
+	from?: string[];
+	/** Only wake pi where the signed-in user is mentioned (default: false) */
+	mentionOnly?: boolean;
+	/** Seconds to stay quiet in a chat after waking pi for it (default: 300) */
+	cooldownSeconds?: number;
+	/** Hard cap on wakes per hour, across all chats (default: 10) */
+	maxTriggersPerHour?: number;
+}
+
+/** A watch config after every default and clamp has been applied. */
+export interface ResolvedWatchConfig {
+	enabled: boolean;
+	intervalSeconds: number;
+	chats: string[];
+	from: string[];
+	mentionOnly: boolean;
+	cooldownSeconds: number;
+	maxTriggersPerHour: number;
+}
+
 /** A Teams identity pi can sign in as. */
 export interface AccountConfig {
-	/** Short label used in tool parameters, e.g. "neoimpulse" */
+	/** Short label used in tool parameters, e.g. "work" */
 	name: string;
 	/** Friendly name for status output */
 	displayName?: string;
@@ -117,6 +162,8 @@ export interface AccountConfig {
 	safetyLevel?: SafetyLevel;
 	/** Scope rules layered on top of the global ones */
 	permissions?: PermissionBlock;
+	/** Listen-mode overrides for this identity */
+	watch?: WatchConfig;
 	/** Additional tenants this identity reaches */
 	tenants?: TenantConfig[];
 }
@@ -132,6 +179,8 @@ export interface TeamsRootConfig {
 	safetyLevel?: SafetyLevel;
 	/** Global scope rules */
 	permissions?: PermissionBlock;
+	/** Global listen-mode settings */
+	watch?: WatchConfig;
 	/** Default page size for message listings (default: 25) */
 	maxMessages?: number;
 	/** Append every write to ~/.pi/agent/pi-teams-audit.jsonl (default: true) */
@@ -161,6 +210,8 @@ export interface TeamsConnection {
 	loopbackPort?: number;
 	safetyLevel: SafetyLevel;
 	permissions: ResolvedPermissions;
+	/** Listen-mode settings in force for this account+tenant */
+	watch: ResolvedWatchConfig;
 	maxMessages: number;
 	audit: boolean;
 	graphBaseUrl: string;
@@ -218,6 +269,29 @@ const DEFAULTS = {
 	audit: true,
 	graphBaseUrl: "https://graph.microsoft.com/v1.0",
 	authorityHost: "https://login.microsoftonline.com",
+};
+
+/**
+ * Listen-mode defaults and the bounds they are clamped to.
+ *
+ * The lower bound on `intervalSeconds` is what keeps a watcher from turning
+ * into a Graph-throttling loop: every tick costs at least one `/me/chats`
+ * round-trip, and each wake costs a full model turn.
+ */
+export const WATCH_DEFAULTS: ResolvedWatchConfig = {
+	enabled: false,
+	intervalSeconds: 60,
+	chats: [],
+	from: [],
+	mentionOnly: false,
+	cooldownSeconds: 300,
+	maxTriggersPerHour: 10,
+};
+
+const WATCH_BOUNDS = {
+	intervalSeconds: { min: 15, max: 3600 },
+	cooldownSeconds: { min: 0, max: 86400 },
+	maxTriggersPerHour: { min: 0, max: 1000 },
 };
 
 const VALID_AUTH_MODES = new Set<string>([
@@ -454,6 +528,7 @@ export function resolveConnection(
 		scopes,
 		safetyLevel: resolveEffectiveSafetyLevel(config.safetyLevel, account, tenant),
 		permissions: resolvePermissions([config.permissions, account.permissions, tenant?.permissions]),
+		watch: resolveWatchConfig(config.watch, account),
 		maxMessages: config.maxMessages ?? DEFAULTS.maxMessages,
 		audit: config.audit ?? DEFAULTS.audit,
 		graphBaseUrl: (config.graphBaseUrl ?? DEFAULTS.graphBaseUrl).replace(/\/+$/, ""),
@@ -591,6 +666,75 @@ export function setDefaultAccount(name: string, tenantName?: string): void {
 	config.defaultAccount = account.name;
 	config.defaultTenant = tenantName;
 	writeRootConfig(config);
+}
+
+/**
+ * Effective listen-mode settings: account > global > defaults.
+ *
+ * Exported for tests — every field is clamped here, so the watcher itself can
+ * assume sane numbers instead of defending against a hand-edited config file.
+ */
+export function resolveWatchConfig(
+	global: WatchConfig | undefined,
+	account: AccountConfig | undefined,
+): ResolvedWatchConfig {
+	const local = account?.watch;
+	const pick = <K extends keyof WatchConfig>(key: K): WatchConfig[K] => local?.[key] ?? global?.[key];
+
+	return {
+		enabled: pick("enabled") ?? WATCH_DEFAULTS.enabled,
+		intervalSeconds: clamp(pick("intervalSeconds"), WATCH_BOUNDS.intervalSeconds, WATCH_DEFAULTS.intervalSeconds),
+		chats: normalizePatterns(pick("chats")),
+		from: normalizePatterns(pick("from")),
+		mentionOnly: pick("mentionOnly") ?? WATCH_DEFAULTS.mentionOnly,
+		cooldownSeconds: clamp(pick("cooldownSeconds"), WATCH_BOUNDS.cooldownSeconds, WATCH_DEFAULTS.cooldownSeconds),
+		maxTriggersPerHour: clamp(
+			pick("maxTriggersPerHour"),
+			WATCH_BOUNDS.maxTriggersPerHour,
+			WATCH_DEFAULTS.maxTriggersPerHour,
+		),
+	};
+}
+
+function clamp(value: unknown, bounds: { min: number; max: number }, fallback: number): number {
+	const number = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+	return Math.min(bounds.max, Math.max(bounds.min, Math.round(number)));
+}
+
+function normalizePatterns(patterns: string[] | undefined): string[] {
+	if (!Array.isArray(patterns)) return [];
+	const cleaned = patterns
+		.filter((pattern): pattern is string => typeof pattern === "string")
+		.map((pattern) => pattern.trim())
+		.filter((pattern) => pattern.length > 0);
+	return [...new Set(cleaned)];
+}
+
+/**
+ * Merge a watch patch into the config file and report what is now in force.
+ *
+ * Writes to the account block when an account is named and to the global block
+ * otherwise — matching how `watch` itself is resolved. The resolved settings
+ * are returned rather than the patch, so a caller reports the effect and not
+ * the request.
+ */
+export function setWatchConfig(patch: WatchConfig, accountName?: string): ResolvedWatchConfig {
+	const config = readRootConfig();
+
+	if (!accountName) {
+		config.watch = { ...config.watch, ...patch };
+		writeRootConfig(config);
+		return resolveWatchConfig(config.watch, undefined);
+	}
+
+	const account = config.accounts.find((a) => a.name.toLowerCase() === accountName.toLowerCase());
+	if (!account) {
+		throw new ConfigError([`account "${accountName}"`], `Account "${accountName}" not found.`);
+	}
+
+	account.watch = { ...account.watch, ...patch };
+	writeRootConfig(config);
+	return resolveWatchConfig(config.watch, account);
 }
 
 /** Set the safety level globally, on an account, or on a tenant. */

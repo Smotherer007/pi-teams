@@ -19,7 +19,9 @@ pi install /path/to/pi-teams
 
 ## Quick start
 
-1. **Register an app in Entra ID** (once per organization — see below).
+1. **Register an app in Entra ID** (once per organization) — the step-by-step
+   walkthrough, including the redirect URI and public-client settings that sign-in
+   needs, is in [docs/entra-app-registration.md](docs/entra-app-registration.md).
 2. **Configure the account:**
    ```
    teams_setup:
@@ -32,12 +34,80 @@ pi install /path/to/pi-teams
    sign-in page and closes itself when you are done — nothing to type.
 4. **Check it works:** `/teams-status`, then `/teams-inbox`.
 
+Full walkthrough with the exact portal paths: **[docs/entra-app-registration.md](docs/entra-app-registration.md)**.
+
+---
+
+## Listen mode
+
+Off by default. When it is on, pi polls your chats and turns an incoming message
+into a prompt it answers — as you, in the chat it arrived in.
+
+```
+/teams-listen on        # switch it on for the session's account
+/teams-listen status    # what is configured, and what is running right now
+/teams-listen off
+```
+
+```json
+"watch": {
+  "enabled": true,
+  "intervalSeconds": 60,
+  "chats": ["Anna*", "Vertrieb*"],
+  "from": ["anna.schmidt@contoso.com"],
+  "mentionOnly": false,
+  "cooldownSeconds": 300,
+  "maxTriggersPerHour": 10
+}
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `false` | whether the watcher runs |
+| `intervalSeconds` | `60` | seconds between polls (minimum 15) |
+| `chats` | `[]` | **where** pi listens: glob patterns matched against topic, label, chat ID and participant names. Empty means every recent chat. |
+| `from` | `[]` | **who** pi listens to: glob patterns matched against display name, UPN and e-mail. Empty means any sender. |
+| `mentionOnly` | `false` | only wake where you are mentioned |
+| `cooldownSeconds` | `300` | stay quiet in a chat after waking pi for it |
+| `maxTriggersPerHour` | `10` | hard cap on wakes per hour |
+
+Set it globally, or per account (the account level wins field by field).
+`teams_watch` writes the same keys; `/teams-listen` writes to the session's
+account.
+
+What it does, and what it deliberately does not:
+
+- **Costs a model turn per wake.** That is what the filters and the hourly cap
+  are for — narrow `chats` and `from`, and enable it for a handful of
+  conversations rather than the whole company.
+- **Never answers the backlog.** The first poll records what is there; only what
+  arrives afterwards wakes pi.
+- **Never wakes for its own messages.** pi posts as you, so its own reply comes
+  back as "my own message" and stops the loop.
+- **Respects the read rules.** A chat excluded by `permissions.read.chats` is
+  not even polled.
+- **Does not bypass the safety model.** A reply it decides to send goes through
+  the same safety level and scope rules as one you asked for. At `confirm` you
+  approve each one; for hands-free answers, narrow `permissions.write.chats` and
+  set `safetyLevel: open` — deliberately, and on an account where you mean it.
+- **Chats only, not channels.** Channel polling needs `ChannelMessage.Read.All`
+  (admin consent) and multiplies the calls; answering in channels stays a
+  requested action.
+
+Why polling and not a webhook: Graph change notifications for chats need a
+publicly reachable HTTPS endpoint plus subscription renewal, which a laptop on a
+home network cannot offer. Polling costs one `/me/chats` call per interval and
+works anywhere.
+
 ---
 
 ## Entra ID app registration
 
-pi signs in with the OAuth 2.0 **device authorization grant**, so it never sees
-your password and your MFA works normally.
+Full walkthrough: **[docs/entra-app-registration.md](docs/entra-app-registration.md)**.
+The short version, with the two settings that sign-in actually depends on:
+
+pi signs in as you with a delegated OAuth 2.0 flow — the browser opens, you sign
+in with your own credentials and MFA, and pi never sees your password.
 
 ### 1. Create the registration
 
@@ -207,8 +277,8 @@ prefer.
   "accounts": [
     {
       "name": "work",
-      "displayName": "NeoImpulse",
-      "tenantId": "neoimpulse.onmicrosoft.com",
+      "displayName": "Contoso",
+      "tenantId": "contoso.onmicrosoft.com",
       "clientId": "00000000-0000-0000-0000-000000000000",
       "authMode": "interactive",
       "safetyLevel": "confirm",
@@ -223,7 +293,7 @@ prefer.
             "deny": ["*/Announcements"]
           },
           "chats": { "allow": ["*"] },
-          "people": { "deny": ["ceo@neoimpulse.de"] }
+          "people": { "deny": ["ceo@contoso.com"] }
         }
       },
       "tenants": [
@@ -337,14 +407,14 @@ teams_permissions:
 | `teams_status` | Which account is active, who pi acts as, what it may do |
 | `teams_permissions` | Show, test or change the allow/deny rules |
 | `teams_doctor` | Diagnose config, sign-in, consent and connectivity |
+| `teams_watch` | Listen mode: status, enable, disable, and the filters for who and where |
 
 ### Reading
 
 | Tool | Description |
 |------|-------------|
 | `teams_inbox` | Chats with new messages plus recent mentions of you |
-| `teams_list_chats` | Recent chats with a preview of the last message |
-| `teams_read_chat` | Messages of one chat |
+| `teams_list_chats` | Recent chats with a preview of the last message || `teams_read_chat` | Messages of one chat |
 | `teams_list_teams` | Teams you belong to |
 | `teams_list_channels` | Channels of a team |
 | `teams_read_channel` | Posts in a channel |
@@ -381,6 +451,7 @@ teams_permissions:
 | `/teams-status` | Show the connection and permissions |
 | `/teams-login` | Sign in to Teams as yourself |
 | `/teams-inbox` | What needs your attention right now |
+| `/teams-listen` | Listen mode: `on`, `off`, or `status` |
 | `/teams-permissions` | What pi may and may not do |
 | `/teams-doctor` | Diagnose the setup |
 
@@ -394,6 +465,32 @@ teams_permissions:
 | `/teams-standup` | Draft and post a standup update |
 | `/teams-meeting-prep` | Context and talking points for your next meeting |
 | `/teams-doctor` | Guided troubleshooting |
+
+---
+
+## How messages are formatted
+
+A message body is treated as **lightweight markdown** and converted to the HTML
+subset Teams renders in a chat bubble:
+
+| You write | Teams shows |
+|-----------|-------------|
+| `**bold**`, `*italic*`, `~~struck~~` | bold, italic, struck through |
+| `` `code` ``, fenced blocks | inline code, code block |
+| `- item`, `1. item` | bullet list, numbered list |
+| `[label](https://…)` | link |
+| `# Heading` | a bold line — Teams has no headings in a chat |
+
+Tables and images are deliberately **not** translated: Teams renders neither in
+a chat, so passing them through would look worse than plain text. Put a table in
+a file and link it instead.
+
+Pass `html: true` on a send tool to bypass the conversion and supply raw HTML
+instead. Everything else is escaped, so a message body cannot inject markup.
+
+This is also why pi writes the way it does: see *How to format a Teams message*
+in the bundled skill. Short, answer-first, bullets for anything enumerable — the
+medium is a chat bubble, not a document.
 
 ---
 
@@ -449,17 +546,22 @@ Data-oriented: plain immutable data, I/O at the edges, pure functions in the
 middle.
 
 - **`src/types.ts`** — domain data as plain interfaces. No behavior.
-- **`src/config/index.ts`** — accounts, tenants, the safety cascade, persistence.
+- **`src/config/index.ts`** — accounts, tenants, the safety cascade, listen-mode settings, persistence.
 - **`src/config/scope.ts`** — allow/deny matching. Pure, and the most heavily
   tested module in the package.
 - **`src/auth/`** — MSAL applications, the file-backed token cache, JWT claims.
 - **`src/graph/client.ts`** — fetch wrapper: bearer token, paging, throttling.
 - **`src/graph/*.ts`** — one module per resource area, returning domain types.
 - **`src/graph/mappers.ts`** — Graph JSON → domain types. Pure.
+- **`src/watch/`** — listen mode: the decision rules (`index.ts`, pure), the
+  polling loop (`loop.ts`), and the prompt an incoming message turns into
+  (`prompt.ts`).
 - **`src/utils/formatting.ts`** — domain types → display strings. Pure.
+- **`src/utils/richtext.ts`** — markdown → the HTML subset Teams renders. Pure.
 - **`src/safety/`** — the three gates and the audit log.
 - **`src/tools/`** — one module per tool.
-- **`src/extension/index.ts`** — registration, commands, the `tool_call` interceptor.
+- **`src/extension/index.ts`** — registration, commands, the `tool_call`
+  interceptor, and the listen-mode lifecycle.
 
 ## Development
 
@@ -470,23 +572,29 @@ npm test
 ```
 
 Tests cover the pure logic — scope matching, the config cascade, message body
-construction, HTML flattening, the safety gates — and run without a tenant or
-a network connection.
+construction, markdown rendering, HTML flattening, the listen-mode decision
+rules, the safety gates — and run without a tenant or a network connection.
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---------|---------------|
+| `AADSTS500113` (no reply address) | The registration has no redirect URI. Add `http://localhost` under *Mobile and desktop applications* — see [docs/entra-app-registration.md](docs/entra-app-registration.md) |
 | `AADSTS7000218` | "Allow public client flows" is off in the app registration |
 | `AADSTS65001` | Consent missing — sign in again, or have an admin consent |
 | `AADSTS50011` (redirect URI mismatch) | Add `http://localhost` under *Mobile and desktop applications*, or pin `loopbackPort` |
 | `AADSTS50020` | The account is not a member/guest of that tenant, or the app is single-tenant |
+| Signed out after about an hour | The tenant grants no `offline_access`, so there is no refresh token. `teams_doctor` names the missing scope; otherwise sign in again when it expires |
 | Browser never opens | No browser is reachable here; `teams_doctor` says why. `teams_login mode: device-code` always works |
 | Browser opens, page never returns | A firewall is blocking the loopback port. Pin `loopbackPort` and allow it, or use the device code flow |
 | "Not signed in" | Run `teams_login`; the saved session may have been revoked |
+| Status line says "not signed in" although sign-in worked | The line is written at session start and after every auth tool; if it lags, `/teams-status` repaints it |
 | "Blocked by configuration" | Your own scope rules. `teams_permissions action: test` shows which rule |
 | "cannot run on an app-only token" | Set `authMode: "interactive"` and run `teams_login` |
 | 403 reading channel messages | `ChannelMessage.Read.All` needs **admin** consent — see "Who has to approve what" |
+| Listen mode does nothing | `teams_watch action: status` says whether it is enabled and running. Only messages arriving *after* it was switched on wake pi |
+| Listen mode answers too much | Narrow `watch.chats` and `watch.from`, raise `cooldownSeconds`, lower `maxTriggersPerHour` |
+| Listen mode stopped by itself | `teams_watch action: status` shows the last polling error; a revoked session or a sleeping laptop is the usual cause, and it resumes on its own |
 | Throttled | Graph rate limit; the client retries with back-off, then reports it |
 
 Run `teams_doctor` first — it checks all of the above at once.

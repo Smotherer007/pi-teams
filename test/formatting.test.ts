@@ -11,7 +11,6 @@ import {
 	formatMessageList,
 	formatPresence,
 	htmlToText,
-	textToHtml,
 	truncate,
 } from "../src/utils/formatting.ts";
 import type { MessageSummary } from "../src/types.ts";
@@ -68,19 +67,6 @@ describe("htmlToText", () => {
 
 	test("collapses runs of blank lines", () => {
 		assert.equal(htmlToText("<p>a</p><p></p><p></p><p>b</p>"), "a\n\nb");
-	});
-});
-
-describe("textToHtml", () => {
-	test("escapes markup and keeps paragraphs", () => {
-		assert.equal(textToHtml("a<b>"), "<p>a&lt;b&gt;</p>");
-		assert.equal(textToHtml("one\n\ntwo"), "<p>one</p><p>two</p>");
-		assert.equal(textToHtml("one\ntwo"), "<p>one<br>two</p>");
-	});
-
-	test("round-trips through htmlToText", () => {
-		const original = "Line one\nLine two";
-		assert.equal(htmlToText(textToHtml(original)), original);
 	});
 });
 

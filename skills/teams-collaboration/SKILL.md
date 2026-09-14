@@ -1,6 +1,6 @@
 ---
 name: teams-collaboration
-description: Microsoft Teams chats, channels, meetings and presence, acting as the signed-in user. Use when the user asks to read, search, summarize, send or reply to Teams messages; to catch up on what they missed; to post in a channel or a thread; to start a chat; to react to a message; to check or set their Teams status; to see who is available; or to schedule, change or cancel a Teams meeting. Also covers multiple Teams accounts and multiple company tenants, and the allow/deny rules that decide what pi may touch.
+description: Microsoft Teams chats, channels, meetings and presence, acting as the signed-in user. Use when the user asks to read, search, summarize, send or reply to Teams messages; to catch up on what they missed; to post in a channel or a thread; to start a chat; to react to a message; to check or set their Teams status; to see who is available; to schedule, change or cancel a Teams meeting; or to make pi notice incoming Teams messages on its own (listen mode). Also covers how to format a message for a chat rather than a document, multiple Teams accounts and multiple company tenants, and the allow/deny rules that decide what pi may touch.
 ---
 
 # Microsoft Teams
@@ -91,6 +91,7 @@ checks a target without touching it.
 | `teams_create_channel` | Adding a channel to a team |
 | `teams_set_presence` / `teams_set_status_message` | Changing the user's status |
 | `teams_create_meeting` / `teams_update_meeting` / `teams_cancel_meeting` | Scheduling work |
+| `teams_watch` | Letting pi notice incoming messages on its own |
 
 ## How to write as the user
 
@@ -104,6 +105,48 @@ checks a target without touching it.
   a detail is missing, ask.
 - Prefer `teams_reply_channel_message` over a new post when answering something
   — starting a second thread fragments the conversation.
+
+## How to format a Teams message
+
+A Teams chat is a chat bubble, not a document. What arrives badly is long
+prose: the reader has to hunt for the point, and it reads as if a machine wrote
+it. The body is rendered as HTML — markdown is converted for you, so write
+markdown and let the tool do the rest.
+
+**Reach for this shape, not for paragraphs:**
+
+```
+Kurz: die QA-Umgebung läuft wieder.
+
+- Ursache: abgelaufenes Zertifikat
+- Fix: erneuert und neu deployt
+- Offen: Monitoring für 90 Tage
+```
+
+- **Lead with the answer.** The first line should work as the whole message for
+  someone who reads nothing else.
+- **Three short paragraphs at most.** If it needs more, it is a document — put
+  it in a file or a wiki page and link it.
+- **Bullets for anything enumerable** — causes, options, next steps. Three items
+  and up belong in a list, not in a sentence with commas.
+- **Bold the one thing that must not be missed**, and only that. Bold used
+  everywhere is bold nowhere.
+- **Numbers, names and dates exactly as they are.** Do not round a figure or
+  paraphrase a deadline into something friendlier.
+- **One question per message.** Two questions get one answer.
+
+**What Teams renders:** `**bold**`, `*italic*`, `` `code` ``, `~~struck~~`,
+`[label](url)`, `- bullets`, `1. numbered`, ``` fences. A `# heading` arrives as
+a bold line — fine for structure, not for hierarchy. **Tables are not supported
+in a chat**: convert them to bullets, or put the table in a file and link it.
+
+**Language and tone:** answer in the language of the conversation, in the
+register of the people in it. Short forms are normal in a chat ("passt", "ok,
+5 min") — but never shorten a fact into ambiguity.
+
+When pi listens on its own (see *Listen mode*), this matters most: an answer
+that arrives unrequested must be readable at a glance, because the recipient is
+not expecting it.
 
 ## Channel addressing
 
@@ -143,3 +186,46 @@ summarize from openers alone.
 Before replying anywhere, read the recent messages first. It prevents
 answering a question that was already answered, and it is what tells you the
 tone to match.
+
+## Listen mode
+
+Listen mode is the only case where pi acts without being asked: it polls the
+user's chats, and an incoming message is turned into a prompt. Off by default,
+and it costs one model turn per message that wakes it.
+
+```yaml
+teams_watch:
+  action: enable
+  chats: ["Anna*", "Vertrieb*"]     # where to listen
+  from: ["anna.schmidt@contoso.com"] # who to listen to
+  mentionOnly: false
+  intervalSeconds: 60
+```
+
+- `chats` decides **where** pi listens (topic, label, chat ID, participants),
+  `from` decides **to whom** (name, UPN, e-mail). Narrow both: a watcher that
+  watches everything answers everything.
+- `/teams-listen on|off|status` switches it in the session; `teams_watch
+  action: status` reports what is configured and what is actually running.
+- The first poll only records what is there — switching it on never answers the
+  backlog, only what arrives afterwards.
+- pi never wakes for its own messages, so it cannot answer itself.
+- Listen mode does **not** bypass anything: a reply it decides to send is
+  subject to the same safety level and scope rules as a reply you asked for. At
+  `safetyLevel: confirm` every one of them is confirmed with the user first.
+
+**When a listen prompt arrives**, do this:
+
+1. Judge the message before answering. "Danke, passt" needs no reply; a
+   question, a blocker or a decision does.
+2. If an answer is warranted, send it with `teams_send_chat_message` to the
+   **chat ID from the prompt** — never re-resolve the chat by name. pi posts as
+   the user, so the wrong chat is a wrong statement in the user's name.
+3. Keep it to the shape in *How to format a Teams message*: answer first, three
+   short paragraphs at most, bullets for lists. An unrequested message has to be
+   readable at a glance.
+4. If no answer is warranted, say so in one line and stop. Do not react, do not
+   touch other chats, do not post to a channel.
+
+Never let listen mode turn into a conversation with itself: if the incoming
+message is already an answer to something pi sent, the loop ends there.

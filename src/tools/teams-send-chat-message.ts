@@ -46,7 +46,10 @@ export const teamsSendChatMessageTool = {
 		"where the mention should appear.",
 	parameters: Type.Object({
 		chat: Type.String({ description: "Chat ID, group chat topic, or a participant's name/e-mail" }),
-		body: Type.String({ description: "Message text. Plain text unless 'html' is true." }),
+		body: Type.String({
+			description:
+				"Message text as lightweight markdown (bold, italics, code, bullets, numbered lists, links)",
+		}),
 		account: AccountParam,
 		tenant: TenantParam,
 		mentions: Type.Optional(
@@ -58,7 +61,7 @@ export const teamsSendChatMessageTool = {
 			Type.String({ description: "'normal' (default), 'high' or 'urgent'" }),
 		),
 		html: Type.Optional(
-			Type.Boolean({ description: "Treat 'body' as raw HTML instead of plain text" }),
+			Type.Boolean({ description: "Send 'body' as raw HTML instead of converting markdown" }),
 		),
 	}),
 	promptSnippet: "Send a message in a Teams chat as the user",
@@ -66,6 +69,8 @@ export const teamsSendChatMessageTool = {
 		"Write the message in the user's voice — it is sent from their account, not from an assistant.",
 		"Show the user the exact text before sending when the intent is even slightly ambiguous.",
 		"Do not add signatures, disclaimers, or a note that the message was written by an AI unless the user asks.",
+		"Format for a chat, not for a document: lead with the answer, three short paragraphs at most, bullets for lists. Bold, italics, code, links and bullets are rendered; headings become bold lines and tables are not supported — keep those out.",
+		"Answer in the language of the conversation you are writing into, and match its register.",
 	],
 
 	async execute(

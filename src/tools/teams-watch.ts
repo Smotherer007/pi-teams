@@ -1,0 +1,229 @@
+/**
+ * teams_watch — switch listen mode on and off, and report what it is doing.
+ *
+ * The actual polling lives in the extension, because only it can inject a
+ * message into the session and update the status line. This tool owns the
+ * configuration and the explanation; the extension restarts the loop when the
+ * config changes.
+ */
+
+import { Type } from "typebox";
+import {
+	getConfigPath,
+	resolveConnection,
+	setWatchConfig,
+	type WatchConfig,
+} from "../config/index.ts";
+import { getActiveWatchLoop, type WatchRuntimeStatus } from "../watch/loop.ts";
+import { errorResult, run, textResult, type ToolContext, type ToolResult } from "./shared.ts";
+
+interface WatchParams {
+	action?: string;
+	account?: string;
+	tenant?: string;
+	intervalSeconds?: number;
+	chats?: string[];
+	from?: string[];
+	mentionOnly?: boolean;
+	cooldownSeconds?: number;
+	maxTriggersPerHour?: number;
+}
+
+/** Renders the effective settings the same way the config file would. */
+function describe(watch: {
+	enabled: boolean;
+	intervalSeconds: number;
+	chats: string[];
+	from: string[];
+	mentionOnly: boolean;
+	cooldownSeconds: number;
+	maxTriggersPerHour: number;
+}): string {
+	return [
+		`- enabled: ${watch.enabled}`,
+		`- poll every: ${watch.intervalSeconds} s`,
+		`- chats: ${watch.chats.length > 0 ? watch.chats.map((c) => `\`${c}\``).join(", ") : "every chat with recent activity"}`,
+		`- people: ${watch.from.length > 0 ? watch.from.map((p) => `\`${p}\``).join(", ") : "any sender"}`,
+		`- mentions only: ${watch.mentionOnly}`,
+		`- cooldown per chat: ${watch.cooldownSeconds} s`,
+		`- wake limit: ${watch.maxTriggersPerHour} per hour`,
+	].join("\n");
+}
+
+/**
+ * The live facts about a running watcher, for the status action.
+ *
+ * Distinguishes "configured on" from "actually polling": after an edit to the
+ * config file the two can differ until the extension picks it up.
+ */
+function runtimeLines(runtime: WatchRuntimeStatus | undefined): string[] {
+	if (!runtime) {
+		return [
+			"Nothing is polling in this session.",
+			"",
+			"Listen mode is read when a pi session starts. If the config says `enabled: true` and this "
+				+ "says otherwise, start a new session — or switch it with the `/teams-listen` command.",
+		];
+	}
+
+	const lines = [
+		"### Running in this session",
+		"",
+		`- running: ${runtime.running}`,
+		`- chats tracked: ${runtime.trackedChats}`,
+		`- woken this hour: ${runtime.wakesThisHour}`,
+	];
+	if (runtime.lastTickAt) {
+		lines.push(`- last poll: ${new Date(runtime.lastTickAt).toLocaleTimeString()}`);
+	}
+	if (runtime.lastWakeChat) {
+		lines.push(`- last wake: ${runtime.lastWakeChat}`);
+	}
+	if (runtime.lastError) {
+		lines.push(`- ⚠️ last error: ${runtime.lastError}`);
+	}
+	return lines;
+}
+
+export const teamsWatchTool = {
+	name: "teams_watch",
+	description:
+		"Control listen mode: pi polls your Teams chats and turns an incoming message into a prompt it answers. " +
+		"Use action 'status' to see the current settings, 'enable' or 'disable' to switch it, and the optional " +
+		"fields to narrow what may wake pi (chat patterns, mentions only, interval, cooldown, hourly limit). " +
+		"The watcher runs in the extension session; this tool changes the configuration it reads.",
+	parameters: Type.Object({
+		action: Type.Optional(
+			Type.String({ description: "'status' (default), 'enable' or 'disable'" }),
+		),
+		account: Type.Optional(
+			Type.String({ description: "Account the settings apply to; omit to set them globally" }),
+		),
+		tenant: Type.Optional(
+			Type.String({
+				description:
+					"Tenant beneath that account. Used by action 'status' to report the settings in force for it — listen mode itself is configured per account, not per tenant.",
+			}),
+		),
+		intervalSeconds: Type.Optional(
+			Type.Number({ description: "Seconds between polls (minimum 15, default 60)" }),
+		),
+		chats: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					"Glob patterns for the chats to watch — matched against topic, label, chat ID and participant names",
+			}),
+		),
+		from: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					"Glob patterns for the people pi listens to — matched against display name, UPN and e-mail. Omit for any sender.",
+			}),
+		),
+		mentionOnly: Type.Optional(
+			Type.Boolean({ description: "Only wake pi where the signed-in user is mentioned" }),
+		),
+		cooldownSeconds: Type.Optional(
+			Type.Number({ description: "Seconds to stay quiet in a chat after waking pi for it (default 300)" }),
+		),
+		maxTriggersPerHour: Type.Optional(
+			Type.Number({ description: "Hard cap on wakes per hour (default 10)" }),
+		),
+	}),
+	promptSnippet: "Turn Teams listen mode on or off",
+	promptGuidelines: [
+		"Use teams_watch when the user wants pi to notice incoming Teams messages on its own.",
+		"Tell the user plainly that listen mode spends a model turn per incoming message, and that pi answers in their name.",
+		"Enabling listen mode takes effect immediately; the settings survive a restart.",
+	],
+
+	async execute(
+		_toolCallId: string,
+		params: WatchParams,
+		_signal: AbortSignal | undefined,
+		_onUpdate: undefined,
+		_ctx: ToolContext,
+	): Promise<ToolResult> {
+		return run(async () => {
+			const action = (params.action ?? "status").toLowerCase();
+
+			// Reported from the resolved connection, so the answer shows what is in
+			// force for that account and tenant — not just what the file says.
+			const inspect = () => {
+				try {
+					return resolveConnection(params.account, params.tenant).watch;
+				} catch {
+					return undefined;
+				}
+			};
+
+			const patch: WatchConfig = {};
+			if (params.intervalSeconds !== undefined) patch.intervalSeconds = params.intervalSeconds;
+			if (params.chats !== undefined) patch.chats = params.chats;
+		if (params.from !== undefined) patch.from = params.from;
+			if (params.mentionOnly !== undefined) patch.mentionOnly = params.mentionOnly;
+			if (params.cooldownSeconds !== undefined) patch.cooldownSeconds = params.cooldownSeconds;
+			if (params.maxTriggersPerHour !== undefined) {
+				patch.maxTriggersPerHour = params.maxTriggersPerHour;
+			}
+
+			switch (action) {
+				case "status": {
+					const watch = inspect();
+					if (!watch) {
+						return errorResult(
+							`No usable Teams account for these settings. Check ${getConfigPath()}.`,
+						);
+					}
+					const loop = getActiveWatchLoop();
+					const runtime = loop?.status();
+					return textResult(
+						[
+							`## Listen mode — ${watch.enabled ? "on" : "off"}`,
+							"",
+							describe(watch),
+							"",
+							...runtimeLines(runtime),
+						].join("\n"),
+						{ watch, runtime },
+					);
+				}
+
+				case "enable": {
+					const watch = setWatchConfig({ ...patch, enabled: true }, params.account);
+					return textResult(
+						[
+							"## Listen mode — on",
+							"",
+							describe(watch),
+							"",
+							"pi now polls these chats and treats a new message as a prompt. It answers in your name " +
+								"and under the safety level in force, so anything it decides to send still follows the " +
+								"usual confirmation rules.",
+							"",
+							`Written to ${getConfigPath()}.`,
+						].join("\n"),
+						{ watch },
+					);
+				}
+
+				case "disable": {
+					const watch = setWatchConfig({ ...patch, enabled: false }, params.account);
+					return textResult(
+						[
+							"## Listen mode — off",
+							"",
+							describe(watch),
+							"",
+							"Polling stops now; the settings stay in the file for the next time.",
+						].join("\n"),
+						{ watch },
+					);
+				}
+
+				default:
+					return errorResult(`Unknown action "${action}". Use 'status', 'enable' or 'disable'.`);
+			}
+		});
+	},
+};

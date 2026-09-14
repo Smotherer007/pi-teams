@@ -82,18 +82,6 @@ export function htmlToText(content: string, contentType = "html"): string {
 		.trim();
 }
 
-/** Convert plain text to the minimal HTML Teams expects for a message body. */
-export function textToHtml(text: string): string {
-	const escaped = text
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;");
-	return escaped
-		.split(/\n{2,}/)
-		.map((para) => `<p>${para.replace(/\n/g, "<br>")}</p>`)
-		.join("");
-}
-
 // ---------------------------------------------------------------------------
 // Dates
 // ---------------------------------------------------------------------------

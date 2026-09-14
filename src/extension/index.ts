@@ -12,6 +12,7 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import {
 	ensureConfigTemplate,
 	getConfigPath,
+	setWatchConfig,
 	tryResolveConnection,
 	type TeamsConnection,
 } from "../config/index.ts";
@@ -22,6 +23,13 @@ import {
 	isMutationTool,
 	LOCAL_CONFIG_TOOLS,
 } from "../safety/index.ts";
+import {
+	setActiveWatchLoop,
+	startWatchLoop,
+	stopActiveWatchLoop,
+	type WatchLoop,
+} from "../watch/loop.ts";
+import { composeWatchPrompt } from "../watch/prompt.ts";
 
 import { teamsSetupTool } from "../tools/teams-setup.ts";
 import { teamsLoginTool, teamsLogoutTool } from "../tools/teams-login.ts";
@@ -49,6 +57,7 @@ import { teamsSearchMessagesTool } from "../tools/teams-search-messages.ts";
 import { teamsReactTool } from "../tools/teams-react.ts";
 import { teamsDeleteMessageTool } from "../tools/teams-delete-message.ts";
 import { teamsInboxTool } from "../tools/teams-inbox.ts";
+import { teamsWatchTool } from "../tools/teams-watch.ts";
 import {
 	teamsGetPresenceTool,
 	teamsSetPresenceTool,
@@ -73,6 +82,7 @@ const tools = [
 	teamsAccountsTool,
 	teamsStatusTool,
 	teamsPermissionsTool,
+	teamsWatchTool,
 	teamsDoctorTool,
 	// Discovery
 	teamsListTeamsTool,
@@ -119,6 +129,74 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	// -----------------------------------------------------------------------
+	// Listen mode
+	// -----------------------------------------------------------------------
+
+	/** The watcher running in this session, when listen mode is on. */
+	let watchLoop: WatchLoop | undefined;
+
+	/** The last polling error the user was told about, so it is said once. */
+	let reportedWatchError: string | undefined;
+
+	const stopWatch = () => {
+		watchLoop?.stop();
+		watchLoop = undefined;
+		setActiveWatchLoop(undefined);
+	};
+
+	/**
+	 * Start the watcher for the session's account, if the config asks for it.
+	 *
+	 * Restarting is the same call: the old loop is stopped first, so a config
+	 * change cannot leave two pollers running.
+	 */
+	const startWatch = (ctx: any) => {
+		stopWatch();
+
+		const conn = refresh();
+		if (!conn?.watch.enabled) return;
+
+		reportedWatchError = undefined;
+		const loop = startWatchLoop({
+			connection: conn,
+			onWake: (event) => {
+				pi.sendUserMessage(composeWatchPrompt(event, event.me), { deliverAs: "followUp" });
+			},
+			onTick: (status) => {
+				if (!status.lastError) reportedWatchError = undefined;
+			},
+			onError: (message) => {
+				// A watcher that fails every tick would otherwise say so every minute.
+				if (message === reportedWatchError) return;
+				reportedWatchError = message;
+				ctx.ui.notify(`Teams listen mode: ${message}`, "warning");
+			},
+		});
+
+		watchLoop = loop;
+		setActiveWatchLoop(loop);
+	};
+
+	/**
+	 * Paint the footer status line from the current connection.
+	 *
+	 * The only place the status line is written, so the three surfaces —
+	 * session start, `/teams-status`, and a tool result — cannot drift apart.
+	 */
+	const paintStatus = (ctx: any) => {
+		const card = buildConnectionCard(refresh());
+		if (!card) return;
+		const watching = !!watchLoop?.status().running;
+		ctx.ui.setStatus(
+			"teams",
+			ctx.ui.theme.fg(
+				card.signedIn ? "success" : "warning",
+				buildConnectionLabel({ ...card, watching }),
+			),
+		);
+	};
+
+	// -----------------------------------------------------------------------
 	// Status card — rendered in the transcript, never sent to the model
 	// -----------------------------------------------------------------------
 
@@ -162,7 +240,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			pi.appendEntry<ConnectionCard>("teams-connection", card);
-			ctx.ui.setStatus("teams", ctx.ui.theme.fg("success", buildConnectionLabel(card)));
+			paintStatus(ctx);
 			ctx.ui.notify(buildConnectionLabel(card), "info");
 		},
 	});
@@ -185,6 +263,56 @@ export default function (pi: ExtensionAPI) {
 				{ deliverAs: "steer" },
 			);
 			ctx.ui.notify("Starting Teams sign-in…", "info");
+		},
+	});
+
+	pi.registerCommand("teams-listen", {
+		description: "Let pi listen to Teams: on, off, or status (default)",
+		handler: async (args, ctx) => {
+			const conn = refresh();
+			if (!conn) {
+				ctx.ui.notify(
+					`Teams: no account configured yet. Use the teams_setup tool, or edit ${getConfigPath()}.`,
+					"warning",
+				);
+				return;
+			}
+
+			const action = args.trim().toLowerCase() || "status";
+
+			if (action === "on" || action === "off") {
+				// Written to the account, not globally: the watcher listens as one
+				// identity, and "which account" must not be a guess.
+				const watch = setWatchConfig({ enabled: action === "on" }, conn.account);
+				startWatch(ctx);
+				paintStatus(ctx);
+				ctx.ui.notify(
+					watch.enabled
+						? `Teams listen mode on — polling every ${watch.intervalSeconds} s, max ${watch.maxTriggersPerHour} wakes/hour.`
+						: "Teams listen mode off.",
+					"info",
+				);
+				return;
+			}
+
+			if (action !== "status") {
+				ctx.ui.notify(`Unknown argument "${action}". Use on, off, or status.`, "warning");
+				return;
+			}
+
+			const runtime = watchLoop?.status();
+			pi.appendEntry<ConnectionCard>("teams-connection", { ...buildConnectionCard(conn)!, watching: !!runtime?.running });
+			ctx.ui.notify(
+				[
+					`Listen mode: ${conn.watch.enabled ? "on" : "off"}`,
+					`every ${conn.watch.intervalSeconds} s`,
+					conn.watch.chats.length > 0 ? `chats: ${conn.watch.chats.join(", ")}` : "all recent chats",
+					conn.watch.from.length > 0 ? `people: ${conn.watch.from.join(", ")}` : "any sender",
+					conn.watch.mentionOnly ? "mentions only" : "every message",
+					runtime ? `${runtime.wakesThisHour} wake(s) this hour` : "not running in this session",
+				].join(" · "),
+				"info",
+			);
 		},
 	});
 
@@ -246,7 +374,8 @@ export default function (pi: ExtensionAPI) {
 		const card = buildConnectionCard(connection);
 		if (!card) return;
 
-		ctx.ui.setStatus("teams", ctx.ui.theme.fg(card.signedIn ? "success" : "warning", buildConnectionLabel(card)));
+		paintStatus(ctx);
+		startWatch(ctx);
 
 		if (!card.signedIn) {
 			ctx.ui.notify(
@@ -295,6 +424,16 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// -----------------------------------------------------------------------
+	// Listen mode lifecycle
+	// -----------------------------------------------------------------------
+
+	pi.on("session_shutdown", () => {
+		// The timer would be unref'd anyway, but a poll in flight during shutdown
+		// would still be a Graph call for a session that is gone.
+		stopWatch();
+	});
+
+	// -----------------------------------------------------------------------
 	// Safety interceptor
 	// -----------------------------------------------------------------------
 
@@ -332,5 +471,40 @@ export default function (pi: ExtensionAPI) {
 			);
 			if (!approved) return { block: true, reason: `User declined: ${summary}` };
 		}
+	});
+
+	// -----------------------------------------------------------------------
+	// Status after a tool ran
+	// -----------------------------------------------------------------------
+
+	/**
+	 * The status line is a snapshot of session start — but every change to the
+	 * connection happens afterwards, in a tool, and tools have no UI context of
+	 * their own. Without this the footer would still read "not signed in" after a
+	 * successful login, and "listening" after listen mode was switched off.
+	 */
+	const STATUS_TOOLS = new Set([
+		"teams_login",
+		"teams_logout",
+		"teams_setup",
+		"teams_accounts",
+		"teams_watch",
+	]);
+
+	/** Tools after which the watcher has to be re-read from the config. */
+	const WATCH_CONFIG_TOOLS = new Set(["teams_watch", "teams_setup", "teams_accounts"]);
+
+	pi.on("tool_result", async (event, ctx) => {
+		if (!STATUS_TOOLS.has(event.toolName) || event.isError) return;
+
+		if (event.toolName === "teams_logout") {
+			// A watcher polling a session that was just removed only produces
+			// errors; leaving it running would be noise, not service.
+			stopWatch();
+		} else if (WATCH_CONFIG_TOOLS.has(event.toolName)) {
+			startWatch(ctx);
+		}
+
+		paintStatus(ctx);
 	});
 }

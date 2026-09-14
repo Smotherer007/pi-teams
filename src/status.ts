@@ -27,6 +27,10 @@ export interface ConnectionCard {
 	otherAccounts: string[];
 	/** Rendered scope rules */
 	permissionSummary: string;
+	/** Listen mode is switched on */
+	watching?: boolean;
+	/** One line on what the watcher is doing, when it runs */
+	watchSummary?: string;
 }
 
 export function buildConnectionCard(
@@ -50,6 +54,19 @@ export function buildConnectionCard(
 		expiresAt: cache.expiresAt ? new Date(cache.expiresAt).toISOString() : undefined,
 		otherAccounts: conn.allAccounts.map((a) => a.name).filter((name) => name !== conn.account),
 		permissionSummary: formatPermissions(conn.permissions),
+		// What the configuration asks for; a caller that knows whether the watcher
+		// is actually running overrides this with the runtime truth.
+		watching: conn.watch.enabled,
+		watchSummary: conn.watch.enabled
+			? [
+					`every ${conn.watch.intervalSeconds} s`,
+					conn.watch.chats.length > 0 ? conn.watch.chats.join(", ") : "all recent chats",
+					conn.watch.from.length > 0 ? `from ${conn.watch.from.join(", ")}` : undefined,
+					`max ${conn.watch.maxTriggersPerHour}/h`,
+				]
+					.filter(Boolean)
+					.join(" · ")
+			: undefined,
 	};
 }
 
@@ -59,7 +76,8 @@ export function buildConnectionLabel(card: ConnectionCard | undefined): string {
 	if (!card.signedIn) return `Teams · ${card.account} · not signed in`;
 
 	const scope = card.tenant === card.account ? card.account : `${card.account}/${card.tenant}`;
-	return `✓ Teams · ${scope}${card.user ? ` · ${card.user}` : ""}`;
+	const listening = card.watching ? " · 👂 listening" : "";
+	return `✓ Teams · ${scope}${card.user ? ` · ${card.user}` : ""}${listening}`;
 }
 
 /** Rich markdown for `/teams-status` and the expanded card. */
@@ -98,6 +116,9 @@ export function formatStatusText(card: ConnectionCard | undefined): string {
 	if (card.otherAccounts.length > 0) {
 		lines.push(`- **Other accounts:** ${card.otherAccounts.join(", ")}`);
 	}
+	lines.push(
+		`- **Listen mode:** ${card.watching ? `on — ${card.watchSummary ?? "running"}` : "off"}`,
+	);
 
 	lines.push("", "### What pi may do", "", card.permissionSummary);
 	return lines.join("\n");

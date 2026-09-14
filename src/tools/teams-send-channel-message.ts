@@ -57,14 +57,17 @@ async function resolveMentions(
 const sharedParams = {
 	channel: Type.String({ description: "Channel name or ID, or a 'Team/Channel' path" }),
 	team: Type.Optional(Type.String({ description: "Team name or ID (omit when using a path)" })),
-	body: Type.String({ description: "Message text. Plain text unless 'html' is true." }),
+	body: Type.String({
+			description:
+				"Message text as lightweight markdown (bold, italics, code, bullets, numbered lists, links)",
+		}),
 	account: AccountParam,
 	tenant: TenantParam,
 	mentions: Type.Optional(
 		Type.Array(Type.String(), { description: "People to @-mention, by name, UPN or e-mail" }),
 	),
 	importance: Type.Optional(Type.String({ description: "'normal' (default), 'high' or 'urgent'" })),
-	html: Type.Optional(Type.Boolean({ description: "Treat 'body' as raw HTML instead of plain text" })),
+	html: Type.Optional(Type.Boolean({ description: "Send 'body' as raw HTML instead of converting markdown" })),
 };
 
 export const teamsSendChannelMessageTool = {
@@ -81,6 +84,8 @@ export const teamsSendChannelMessageTool = {
 	promptGuidelines: [
 		"Write in the user's voice — the post is attributed to them, not to an assistant.",
 		"Show the exact text and the target channel before posting when there is any ambiguity.",
+		"Format for a chat, not for a document: lead with the answer, three short paragraphs at most, bullets for lists. Bold, italics, code, links and bullets are rendered; headings become bold lines and tables are not supported — keep those out.",
+		"Answer in the language of the conversation you are writing into, and match its register.",
 	],
 
 	async execute(

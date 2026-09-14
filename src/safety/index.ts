@@ -39,7 +39,7 @@ export function isMutationTool(toolName: string): boolean {
  * needs a way to add an account or sign out. They also work before anything is
  * configured at all, which is the whole point of `teams_setup`.
  */
-export const LOCAL_CONFIG_TOOLS = new Set<string>(["teams_setup", "teams_logout"]);
+export const LOCAL_CONFIG_TOOLS = new Set<string>(["teams_setup", "teams_logout", "teams_watch"]);
 
 /**
  * Why a mutation must be refused outright, or undefined when it may proceed

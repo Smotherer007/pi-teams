@@ -11,7 +11,7 @@ import type { TeamsConnection } from "../config/index.ts";
 import type { ChannelSummary, MessageLocation, MessageSummary, PersonRef } from "../types.ts";
 import { graphGetOptional, graphList, graphPost } from "./client.ts";
 import { mapMessage } from "./mappers.ts";
-import { textToHtml } from "../utils/formatting.ts";
+import { markdownToTeamsHtml } from "../utils/richtext.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Raw = Record<string, any>;
@@ -21,9 +21,15 @@ type Raw = Record<string, any>;
 // ---------------------------------------------------------------------------
 
 export interface MessageInput {
-	/** Message text — plain text unless `html` is true */
+	/**
+	 * Message text.
+	 *
+	 * Treated as lightweight markdown by default — bold, italic, code, bullets,
+	 * numbered lists, links and `# headings` are converted to the HTML Teams
+	 * renders. Set `html` to true to send raw HTML instead.
+	 */
 	body: string;
-	/** Treat `body` as raw HTML instead of escaping it */
+	/** Treat `body` as raw HTML instead of converting markdown */
 	html?: boolean;
 	/** Channel messages only */
 	subject?: string;
@@ -39,10 +45,14 @@ export interface MessageInput {
  * Mentions are the fiddly part: Teams requires an `<at id="N">` span in the
  * HTML *and* a matching entry in the `mentions` array. The display name is
  * replaced in the text so the caller can just write "@Anna Schmidt".
+ *
+ * Markdown is converted unless the caller says the body is already HTML: what
+ * comes back from a model is markdown, and markdown sent raw arrives as
+ * asterisks and dashes.
  */
 export function buildMessageBody(input: MessageInput): Record<string, unknown> {
 	const mentions = input.mentions ?? [];
-	let content = input.html ? input.body : textToHtml(input.body);
+	let content = input.html ? input.body : markdownToTeamsHtml(input.body);
 
 	const mentionEntries: Record<string, unknown>[] = [];
 	mentions.forEach((person, index) => {

@@ -27,4 +27,5 @@ export const MUTATION_TOOLS = new Set<string>([
 	// Local configuration and credentials
 	"teams_setup",
 	"teams_logout",
+	"teams_watch",
 ]);
