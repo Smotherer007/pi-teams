@@ -13,7 +13,9 @@ import {
 	createOnlineMeeting,
 	getEvent,
 	listEvents,
+	respondToEvent,
 	updateEvent,
+	type EventResponse,
 } from "../graph/calendar.ts";
 import { auditWrite } from "../safety/audit.ts";
 import { assertAccess } from "../safety/index.ts";
@@ -297,6 +299,102 @@ export const teamsUpdateMeetingTool = {
 
 			return textResult([`✅ Meeting updated.`, "", formatEventDetail(event)].join("\n"), {
 				eventId: event.id,
+			});
+		});
+	},
+};
+
+export const teamsRespondInviteTool = {
+	name: "teams_respond_invite",
+	description:
+		"Answer a Microsoft Teams meeting invitation as the signed-in user: accept, decline, or mark as " +
+		"tentative. The organizer is notified unless sendResponse is false. Get the eventId from " +
+		"teams_list_meetings. Only invitations can be answered this way — a meeting the user organizes is " +
+		"changed with teams_update_meeting or cancelled with teams_cancel_meeting.",
+	parameters: Type.Object({
+		eventId: Type.String({ description: "Calendar event ID of the invitation" }),
+		response: Type.Union(
+			[Type.Literal("accept"), Type.Literal("decline"), Type.Literal("tentative")],
+			{ description: "'accept', 'decline', or 'tentative'" },
+		),
+		comment: Type.Optional(
+			Type.String({ description: "Note sent to the organizer with the answer" }),
+		),
+		sendResponse: Type.Optional(
+			Type.Boolean({
+				description: "Notify the organizer (default true). Set false to answer silently",
+			}),
+		),
+		account: AccountParam,
+		tenant: TenantParam,
+	}),
+	promptSnippet: "Accept or decline a Teams meeting invitation",
+	promptGuidelines: [
+		"Answering an invitation notifies the organizer, so only respond to an invitation the user actually decided on.",
+	],
+
+	async execute(
+		_toolCallId: string,
+		params: {
+			eventId: string;
+			response: "accept" | "decline" | "tentative";
+			comment?: string;
+			sendResponse?: boolean;
+			account?: string;
+			tenant?: string;
+		},
+		signal: AbortSignal | undefined,
+		_onUpdate: undefined,
+		ctx: ToolContext,
+	): Promise<ToolResult> {
+		return run(async () => {
+			const conn = connectionFor(ctx, params.account, params.tenant);
+			const me = await currentUser(conn, signal);
+
+			const event = await getEvent(conn, params.eventId, signal);
+			if (!event) return errorResult(`Event ${params.eventId} not found. Check the ID from teams_list_meetings.`);
+
+			// Graph would answer with a bare error; the real problem is that the user
+			// is the organizer, and answering their own invitation is a no-op.
+			const organizer = [event.organizer?.mail, event.organizer?.upn].filter(Boolean) as string[];
+			const mine = [me.mail, me.upn].filter(Boolean) as string[];
+			if (
+				organizer.length > 0 &&
+				mine.some((address) => organizer.some((other) => other.toLowerCase() === address.toLowerCase()))
+			) {
+				return errorResult(
+					`You organize "${event.subject}" — there is no invitation to answer. ` +
+						`Use teams_update_meeting to change it, or teams_cancel_meeting to call it off.`,
+				);
+			}
+
+			const response: EventResponse = params.response === "tentative" ? "tentativelyAccept" : params.response;
+			await respondToEvent(conn, params.eventId, response, {
+				comment: params.comment,
+				sendResponse: params.sendResponse,
+				signal,
+			});
+
+			auditWrite(conn.audit, {
+				tool: "teams_respond_invite",
+				account: conn.account,
+				tenant: conn.tenant,
+				actor: me.upn,
+				target: `event:${event.subject}`,
+				summary: `answered the invitation with "${params.response}"`,
+			});
+
+			const verb =
+				params.response === "accept"
+					? "accepted"
+					: params.response === "decline"
+						? "declined"
+						: "marked as tentative";
+			const notified = params.sendResponse === false ? " (organizer not notified)" : "";
+
+			return textResult(`✅ "${event.subject}" ${verb}${notified}.`, {
+				eventId: params.eventId,
+				response: params.response,
 			});
 		});
 	},

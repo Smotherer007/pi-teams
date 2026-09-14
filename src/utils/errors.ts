@@ -40,6 +40,7 @@ const CONSENT_HINTS: Record<string, string> = {
 	"ChannelMessage.Send": "posting in channels",
 	"Chat.ReadWrite": "reading and sending chat messages",
 	"ChatMessage.Send": "sending chat messages",
+	"ChatMember.ReadWrite": "removing someone from a chat",
 	"Presence.ReadWrite": "reading and setting your presence",
 	"Calendars.ReadWrite": "reading and creating calendar events",
 	"OnlineMeetings.ReadWrite": "creating Teams meetings",

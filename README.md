@@ -7,6 +7,8 @@ from your account, in your name, in the right thread. Multiple Teams accounts
 and multiple company tenants live side by side, and a configuration file
 decides exactly which teams, channels, chats and people pi may touch.
 
+![pi-teams in the pi coding agent](screenshot.png)
+
 ## Installation
 
 ```bash
@@ -414,7 +416,8 @@ teams_permissions:
 | Tool | Description |
 |------|-------------|
 | `teams_inbox` | Chats with new messages plus recent mentions of you |
-| `teams_list_chats` | Recent chats with a preview of the last message || `teams_read_chat` | Messages of one chat |
+| `teams_list_chats` | Recent chats with a preview of the last message |
+| `teams_read_chat` | Messages of one chat |
 | `teams_list_teams` | Teams you belong to |
 | `teams_list_channels` | Channels of a team |
 | `teams_read_channel` | Posts in a channel |
@@ -424,6 +427,7 @@ teams_permissions:
 | `teams_find_user` | Directory lookup by name, e-mail or UPN |
 | `teams_list_files` | Files in a channel's SharePoint folder |
 | `teams_get_presence` | Your status, a colleague's, or a whole chat's |
+| `teams_availability` | When several people are all free, from calendar free/busy |
 | `teams_list_meetings` | Calendar events and meetings in a range |
 | `teams_get_meeting` | One meeting in full |
 
@@ -436,13 +440,22 @@ teams_permissions:
 | `teams_send_channel_message` | Post in a channel as you |
 | `teams_reply_channel_message` | Reply inside an existing thread |
 | `teams_react` | Add or remove an emoji reaction |
+| `teams_mark_read` | Mark a chat as read (or unread again) — the natural end of a catch-up |
+| `teams_update_message` | Edit a message you already sent |
+| `teams_chat_members` | Add someone to a group chat, or remove them |
 | `teams_delete_message` | Soft-delete (or restore) a message you sent |
-| `teams_create_channel` | Add a channel to a team |
 | `teams_set_presence` | Set your Teams status |
 | `teams_set_status_message` | Set the note under your name |
 | `teams_create_meeting` | Schedule a Teams meeting with invitations |
 | `teams_update_meeting` | Change a meeting you organize |
+| `teams_respond_invite` | Accept, decline or tentatively accept an invitation |
 | `teams_cancel_meeting` | Cancel a meeting |
+
+Editing and deleting apply to **chat** messages. A channel post cannot be
+created, edited or deleted through Graph with the permissions pi asks for
+(`Channel.Create`, `ChannelMessage.ReadWrite`) — that stays in the Teams client.
+Posting and replying in channels, and reacting to channel messages, work as
+usual.
 
 ## Commands
 
@@ -464,6 +477,7 @@ teams_permissions:
 | `/teams-channel-digest` | Decisions, open questions and action items in a channel |
 | `/teams-standup` | Draft and post a standup update |
 | `/teams-meeting-prep` | Context and talking points for your next meeting |
+| `/teams-schedule` | Find a time everyone is free and book it |
 | `/teams-doctor` | Guided troubleshooting |
 
 ---
@@ -558,6 +572,9 @@ middle.
   (`prompt.ts`).
 - **`src/utils/formatting.ts`** — domain types → display strings. Pure.
 - **`src/utils/richtext.ts`** — markdown → the HTML subset Teams renders. Pure.
+- **`src/utils/slots.ts`** — availability view → the free slots everybody
+  shares. Pure, and the part of scheduling that can be wrong without looking
+  wrong.
 - **`src/safety/`** — the three gates and the audit log.
 - **`src/tools/`** — one module per tool.
 - **`src/extension/index.ts`** — registration, commands, the `tool_call`
@@ -572,8 +589,9 @@ npm test
 ```
 
 Tests cover the pure logic — scope matching, the config cascade, message body
-construction, markdown rendering, HTML flattening, the listen-mode decision
-rules, the safety gates — and run without a tenant or a network connection.
+construction, markdown rendering, HTML flattening, free-slot arithmetic, the
+listen-mode decision rules, the safety gates — and run without a tenant or a
+network connection.
 
 ## Troubleshooting
 

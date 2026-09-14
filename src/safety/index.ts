@@ -82,6 +82,14 @@ const APP_ONLY_FORBIDDEN = new Set<string>([
 	"teams_create_chat",
 	"teams_delete_message",
 	"teams_react",
+	// The read-cursor actions are delegated-only in Graph ("Application: not
+	// supported"), so an app-only token gets a 403 with no explanation.
+	"teams_mark_read",
+	// An app-only token may only touch messages for migration and DLP, and a
+	// membership change with no person behind it is exactly the kind of write
+	// this gate exists to stop.
+	"teams_update_message",
+	"teams_chat_members",
 	"teams_set_presence",
 	"teams_set_status_message",
 ]);
@@ -120,12 +128,18 @@ export function formatMutationSummary(
 			const people = Array.isArray(params.participants) ? params.participants.join(", ") : text(params.participants);
 			return `Create a new chat with: ${text(people, 200)}`;
 		}
-		case "teams_create_channel":
-			return `Create channel "${text(params.name, 60)}" in team "${text(params.team, 60)}"`;
 		case "teams_delete_message":
 			return `Delete your message ${text(params.messageId, 60)}`;
 		case "teams_react":
 			return `${params.remove ? "Remove" : "Add"} reaction ${text(params.reaction, 10)} on message ${text(params.messageId, 50)}`;
+		case "teams_mark_read":
+			return `${params.read === false ? "Mark as unread" : "Mark as read"}: chat "${text(params.chat, 60)}"`;
+		case "teams_update_message":
+			return `Edit your message ${text(params.messageId, 50)} in ${text(params.chat ?? params.channel, 60)}:\n\n${text(params.body, 400)}`;
+		case "teams_chat_members":
+			return `${params.action === "remove" ? "Remove" : "Add"} ${text(params.person, 80)} ${params.action === "remove" ? "from" : "to"} the chat "${text(params.chat, 60)}"`;
+		case "teams_respond_invite":
+			return `${text(params.response, 20)} the invitation ${text(params.eventId, 50)}${params.comment ? `: "${text(params.comment, 160)}"` : ""}`;
 		case "teams_set_presence":
 			return `Set your Teams presence to ${text(params.availability, 30)}${params.expiresIn ? ` for ${text(params.expiresIn, 20)}` : ""}`;
 		case "teams_set_status_message":

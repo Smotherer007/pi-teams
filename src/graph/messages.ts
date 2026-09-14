@@ -9,7 +9,7 @@
 
 import type { TeamsConnection } from "../config/index.ts";
 import type { ChannelSummary, MessageLocation, MessageSummary, PersonRef } from "../types.ts";
-import { graphGetOptional, graphList, graphPost } from "./client.ts";
+import { graphGetOptional, graphList, graphPatch, graphPost } from "./client.ts";
 import { mapMessage } from "./mappers.ts";
 import { markdownToTeamsHtml } from "../utils/richtext.ts";
 
@@ -292,62 +292,76 @@ export async function replyToChannelMessage(
 }
 
 /**
- * Path for the softDelete / undoSoftDelete actions.
+ * Path to one message in a chat — the base for editing and deleting.
  *
- * The chat form takes an explicit user id — Graph does not accept `/me` here —
- * which is why every caller has to resolve the signed-in user first.
+ * The user id is explicit: Graph does not accept `/me` in this position, which
+ * is why every caller resolves the signed-in user first.
+ *
+ * There is no channel form. Editing or deleting a channel post needs the
+ * `ChannelMessage.ReadWrite` scope, and this package deliberately does not ask
+ * for a permission it cannot rely on being granted.
  */
-export function deletePath(
-	location: MessageLocation,
-	messageId: string,
-	userId: string,
-	replyId?: string,
-): string {
-	if (location.kind === "chat") {
-		return (
-			`/users/${encodeURIComponent(userId)}` +
-			`/chats/${encodeURIComponent(location.chatId!)}` +
-			`/messages/${encodeURIComponent(messageId)}`
-		);
-	}
-	const base = `${channelPath(location.teamId!, location.channelId!)}/${encodeURIComponent(messageId)}`;
-	return replyId ? `${base}/replies/${encodeURIComponent(replyId)}` : base;
+export function messagePath(chatId: string, messageId: string, userId: string): string {
+	return (
+		`/users/${encodeURIComponent(userId)}` +
+		`/chats/${encodeURIComponent(chatId)}` +
+		`/messages/${encodeURIComponent(messageId)}`
+	);
 }
 
 /**
- * Delete one of the signed-in user's own messages (soft delete, as in the app).
+ * Delete one of the signed-in user's own chat messages (soft delete, as in the app).
  *
  * Graph exposes this as an action, not an HTTP DELETE, and only for the sender.
  */
 export async function softDeleteMessage(
 	conn: TeamsConnection,
-	location: MessageLocation,
+	chatId: string,
 	messageId: string,
 	userId: string,
-	options: { replyId?: string; signal?: AbortSignal } = {},
+	options: { signal?: AbortSignal } = {},
 ): Promise<void> {
-	await graphPost(
-		conn,
-		`${deletePath(location, messageId, userId, options.replyId)}/softDelete`,
-		undefined,
-		{ signal: options.signal },
-	);
+	await graphPost(conn, `${messagePath(chatId, messageId, userId)}/softDelete`, undefined, {
+		signal: options.signal,
+	});
 }
 
 /** Restore a message that was soft-deleted. */
 export async function undoSoftDeleteMessage(
 	conn: TeamsConnection,
-	location: MessageLocation,
+	chatId: string,
 	messageId: string,
 	userId: string,
-	options: { replyId?: string; signal?: AbortSignal } = {},
+	options: { signal?: AbortSignal } = {},
 ): Promise<void> {
-	await graphPost(
-		conn,
-		`${deletePath(location, messageId, userId, options.replyId)}/undoSoftDelete`,
-		undefined,
-		{ signal: options.signal },
-	);
+	await graphPost(conn, `${messagePath(chatId, messageId, userId)}/undoSoftDelete`, undefined, {
+		signal: options.signal,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Editing
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewrite one of the signed-in user's own chat messages.
+ *
+ * Only the body is patched: an edit replaces the text as it stands, and sending
+ * a fresh set of mention entities would silently re-notify people who were
+ * already notified by the original message.
+ */
+export async function updateMessage(
+	conn: TeamsConnection,
+	chatId: string,
+	messageId: string,
+	userId: string,
+	input: { body: string; html?: boolean },
+	options: { signal?: AbortSignal } = {},
+): Promise<void> {
+	const { body } = buildMessageBody({ body: input.body, html: input.html });
+	await graphPatch(conn, messagePath(chatId, messageId, userId), { body }, {
+		signal: options.signal,
+	});
 }
 
 // ---------------------------------------------------------------------------

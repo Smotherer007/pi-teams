@@ -114,6 +114,68 @@ export function formatRelative(iso: string | undefined): string {
 	return formatDate(iso);
 }
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = [
+	"Jan",
+	"Feb",
+	"Mar",
+	"Apr",
+	"May",
+	"Jun",
+	"Jul",
+	"Aug",
+	"Sep",
+	"Oct",
+	"Nov",
+	"Dec",
+];
+
+/**
+ * Split a naive Graph date-time into its parts, as UTC.
+ *
+ * Availability views and free/busy blocks arrive already localised to the zone
+ * the caller asked Graph for, so re-interpreting them in the machine's zone
+ * would shift every time by the offset between the two.
+ */
+function naiveParts(value: string | undefined):
+	| { weekday: string; day: number; month: string; year: number; time: string }
+	| undefined {
+	if (!value) return undefined;
+	const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(value.trim());
+	if (!match) return undefined;
+	const [, year, month, day, hour, minute] = match;
+	const asUtc = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+	return {
+		weekday: WEEKDAYS[asUtc.getUTCDay()] ?? "",
+		day: Number(day),
+		month: MONTHS[Number(month) - 1] ?? "",
+		year: Number(year),
+		time: `${hour}:${minute}`,
+	};
+}
+
+/** "Mon 15 Sep 2026" — a window's day, without the clock time. */
+export function formatNaiveDay(value: string | undefined): string {
+	const parts = naiveParts(value);
+	if (!parts) return value ?? "";
+	return `${parts.weekday} ${parts.day} ${parts.month} ${parts.year}`;
+}
+
+/** "09:00–09:30" — the clock part of a free/busy block. */
+export function formatTimeRange(start: string | undefined, end: string | undefined): string {
+	const from = naiveParts(start);
+	const to = naiveParts(end);
+	if (!from || !to) return "unknown time";
+	return `${from.time}–${to.time}`;
+}
+
+/** "Mon 15 Sep, 09:00–09:30" — one proposed slot. */
+export function formatSlotRange(start: string | undefined, end: string | undefined): string {
+	const parts = naiveParts(start);
+	if (!parts) return `${start ?? "?"}–${end ?? "?"}`;
+	return `${parts.weekday} ${parts.day} ${parts.month}, ${formatTimeRange(start, end)}`;
+}
+
 /** Shorten a string for previews, without cutting mid-escape. */
 export function truncate(text: string, max: number): string {
 	const oneLine = text.replace(/\s*\n\s*/g, " ").trim();

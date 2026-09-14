@@ -89,6 +89,30 @@ export function connectionFor(
 }
 
 // ---------------------------------------------------------------------------
+// Consent gates
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether this account asks for a delegated scope.
+ *
+ * A delegated scope cannot be granted unless it was requested, so the
+ * configuration is a reliable gate: if it is missing here, the Graph call
+ * cannot succeed, and its failure would be a consent error that says nothing
+ * about the one-line fix.
+ */
+export function hasScope(conn: TeamsConnection, scope: string): boolean {
+	return conn.scopes.some((entry) => entry.toLowerCase() === scope.toLowerCase());
+}
+
+/** The message to return when a tool needs a scope the account does not request. */
+export function missingScopeError(scope: string, feature: string): string {
+	return (
+		`${feature} needs the Microsoft Graph scope "${scope}", which this account does not request. ` +
+		`Add it to "scopes" in pi-teams.json (or have an admin grant it in Entra ID) and run teams_login again.`
+	);
+}
+
+// ---------------------------------------------------------------------------
 // Identity cache
 // ---------------------------------------------------------------------------
 

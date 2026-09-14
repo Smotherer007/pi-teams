@@ -10,7 +10,7 @@ import {
 	isMutationTool,
 	LOCAL_CONFIG_TOOLS,
 } from "../src/safety/index.ts";
-import { buildMessageBody, deletePath } from "../src/graph/messages.ts";
+import { buildMessageBody, messagePath } from "../src/graph/messages.ts";
 import { MUTATION_TOOLS } from "../src/tools/tool-names.ts";
 
 describe("mutation classification", () => {
@@ -72,29 +72,17 @@ describe("blockReason", () => {
 	});
 });
 
-describe("deletePath", () => {
+describe("messagePath", () => {
 	test("the chat form uses an explicit user id — Graph rejects /me here", () => {
-		const path = deletePath({ kind: "chat", chatId: "19:abc" }, "1700", "user-1");
+		const path = messagePath("19:abc", "1700", "user-1");
 		assert.equal(path, "/users/user-1/chats/19%3Aabc/messages/1700");
 	});
 
-	test("the channel form ignores the user id", () => {
-		const path = deletePath(
-			{ kind: "channel", teamId: "t1", channelId: "19:c" },
-			"1700",
-			"user-1",
+	test("every segment is escaped, so a chat id cannot break out of the path", () => {
+		assert.equal(
+			messagePath("19:abc@thread.v2", "1700/../evil", "user-1"),
+			"/users/user-1/chats/19%3Aabc%40thread.v2/messages/1700%2F..%2Fevil",
 		);
-		assert.equal(path, "/teams/t1/channels/19%3Ac/messages/1700");
-	});
-
-	test("a reply gets its own segment", () => {
-		const path = deletePath(
-			{ kind: "channel", teamId: "t1", channelId: "19:c" },
-			"1700",
-			"user-1",
-			"1800",
-		);
-		assert.match(path, /\/messages\/1700\/replies\/1800$/);
 	});
 });
 

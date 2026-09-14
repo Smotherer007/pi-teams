@@ -3,10 +3,10 @@
  */
 
 import type { TeamsConnection } from "../config/index.ts";
-import type { ChatSummary, PersonRef } from "../types.ts";
-import { graphGetOptional, graphList, graphPost } from "./client.ts";
+import type { ChatMemberSummary, ChatSummary, PersonRef } from "../types.ts";
+import { graphDelete, graphGetOptional, graphList, graphPost } from "./client.ts";
 import { GraphError } from "../utils/errors.ts";
-import { mapChat } from "./mappers.ts";
+import { mapChat, mapChatMember } from "./mappers.ts";
 import { resolveUserId } from "./me.ts";
 
 /**
@@ -138,6 +138,137 @@ export async function createChat(
 
 	const raw = await graphPost<Record<string, unknown>>(conn, "/chats", body, { signal: options.signal });
 	return mapChat((raw ?? {}) as Record<string, never>);
+}
+
+// ---------------------------------------------------------------------------
+// Read state
+// ---------------------------------------------------------------------------
+
+/**
+ * Endpoint and body for the two read-cursor actions.
+ *
+ * Graph takes the user in the **body**, not in the URL: the delegated token
+ * says who is allowed to act, the body says whose read state changes. Kept as
+ * a pure function (like `deletePath`) because this is the part worth testing.
+ */
+export function readStateRequest(
+	chatId: string,
+	user: { id: string; tenantId?: string },
+	read: boolean,
+): { path: string; body: Record<string, unknown> } {
+	return {
+		path: `/chats/${encodeURIComponent(chatId)}/${
+			read ? "markChatReadForUser" : "markChatUnreadForUser"
+		}`,
+		// `tenantId` may be undefined; JSON.stringify drops it, and Graph accepts
+		// the id alone.
+		body: { user: { id: user.id, tenantId: user.tenantId } },
+	};
+}
+
+/**
+ * Mark a chat as read — or unread again — for the signed-in user.
+ *
+ * This is the only read-state a delegated token may move, and it moves the
+ * same cursor the app moves when you open a chat: it does not touch what
+ * anyone else sees, but read receipts (where the tenant has them on) do make
+ * the chat look seen. Channel messages have no equivalent action.
+ */
+export async function setChatReadState(
+	conn: TeamsConnection,
+	chatId: string,
+	user: { id: string; tenantId?: string },
+	read: boolean,
+	options: { signal?: AbortSignal } = {},
+): Promise<void> {
+	const { path, body } = readStateRequest(chatId, user, read);
+	await graphPost(conn, path, body, { signal: options.signal });
+}
+
+// ---------------------------------------------------------------------------
+// Membership
+// ---------------------------------------------------------------------------
+
+/**
+ * The members of a chat, with the membership id each one is removed by.
+ *
+ * Read raw rather than through `mapChat`, because a `ChatSummary` keeps only
+ * the people (what a label and the scope rules need) and drops the membership
+ * id that removing someone requires.
+ */
+export async function listChatMembers(
+	conn: TeamsConnection,
+	chatId: string,
+	options: { signal?: AbortSignal } = {},
+): Promise<ChatMemberSummary[]> {
+	const raw = await graphList<Record<string, never>>(
+		conn,
+		`/chats/${encodeURIComponent(chatId)}/members`,
+		{ max: 100, signal: options.signal },
+	);
+	return raw.map((entry) => mapChatMember(entry));
+}
+
+/**
+ * Add a person to an existing chat.
+ *
+ * Graph binds the member by user id or UPN; a 1:1 chat cannot be extended (the
+ * Teams client converts it to a group chat, Graph refuses), so callers should
+ * check the chat type first.
+ */
+export async function addChatMember(
+	conn: TeamsConnection,
+	chatId: string,
+	person: PersonRef,
+	options: { signal?: AbortSignal } = {},
+): Promise<void> {
+	const bind = person.id ?? person.upn ?? person.mail;
+	if (!bind) throw new Error(`Cannot add ${person.displayName}: no user id, UPN or e-mail address.`);
+
+	await graphPost(
+		conn,
+		`/chats/${encodeURIComponent(chatId)}/members`,
+		{
+			"@odata.type": "#microsoft.graph.aadUserConversationMember",
+			"user@odata.bind": `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(bind)}`,
+			roles: [],
+		},
+		{ signal: options.signal },
+	);
+}
+
+/** Remove one membership. Graph takes the membership id, not the user id. */
+export async function removeChatMember(
+	conn: TeamsConnection,
+	chatId: string,
+	membershipId: string,
+	options: { signal?: AbortSignal } = {},
+): Promise<void> {
+	await graphDelete(
+		conn,
+		`/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(membershipId)}`,
+		{ signal: options.signal },
+	);
+}
+
+/**
+ * Find the membership of one person in a chat.
+ *
+ * Matching goes through the identifiers a caller can actually have: object id,
+ * UPN, e-mail, display name.
+ */
+export function matchChatMember(
+	members: readonly ChatMemberSummary[],
+	reference: string,
+): ChatMemberSummary | undefined {
+	const needle = reference.trim().toLowerCase();
+	if (!needle) return undefined;
+
+	return members.find((member) =>
+		[member.userId, member.upn, member.mail, member.displayName]
+			.filter((value): value is string => !!value)
+			.some((value) => value.toLowerCase() === needle),
+	);
 }
 
 /** Resolve people references (UPN, e-mail, name) to PersonRefs. */

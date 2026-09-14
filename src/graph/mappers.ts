@@ -9,6 +9,7 @@
 
 import type {
 	ChannelSummary,
+	ChatMemberSummary,
 	ChatSummary,
 	DriveItemSummary,
 	EventSummary,
@@ -63,6 +64,25 @@ export function mapMember(raw: Raw): MemberSummary {
 		displayName: raw.displayName ?? "(unknown)",
 		upn: raw.userPrincipalName ?? undefined,
 		mail: raw.email ?? raw.mail ?? undefined,
+		roles: Array.isArray(raw.roles) ? raw.roles : [],
+	};
+}
+
+/**
+ * A chat member.
+ *
+ * Graph exposes two identifiers per member and they are not interchangeable:
+ * the membership id is what removes someone, the user id is what says who they
+ * are. Keeping both here is cheaper than looking them up again later.
+ */
+export function mapChatMember(raw: Raw): ChatMemberSummary {
+	const user = raw.user ?? raw;
+	return {
+		membershipId: raw.id ?? "",
+		userId: user?.id ?? undefined,
+		displayName: raw.displayName ?? user?.displayName ?? "(unknown)",
+		upn: user?.userPrincipalName ?? raw.userPrincipalName ?? undefined,
+		mail: user?.email ?? raw.email ?? undefined,
 		roles: Array.isArray(raw.roles) ? raw.roles : [],
 	};
 }

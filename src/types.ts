@@ -86,6 +86,17 @@ export interface ChatSummary {
 	webUrl?: string;
 }
 
+export interface ChatMemberSummary {
+	/** conversationMember id — the identifier DELETE /chats/{id}/members/{id} needs */
+	membershipId: string;
+	/** Object id of the person behind the membership */
+	userId?: string;
+	displayName: string;
+	upn?: string;
+	mail?: string;
+	roles: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------

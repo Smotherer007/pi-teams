@@ -104,6 +104,31 @@ requests them and rejects them in an explicit scope list.
 **What is not needed:** no client secret, no certificate, no redirect URI beyond
 step 2, no application (as opposed to delegated) permissions.
 
+### Optional: one capability that needs one more permission
+
+Everything above is what pi asks for by default. One action stays off until you
+add the scope — to this list **and** to `scopes` in `pi-teams.json` — and sign in
+again:
+
+| Permission | Unlocks | Consent |
+|---|---|---|
+| `ChatMember.ReadWrite` | removing someone from a chat (`teams_chat_members`) | user |
+
+Without it the tool answers with the exact scope it is missing instead of
+failing at Graph with a consent error. Editing and deleting chat messages,
+adding chat members and answering invitations all work with the default set.
+
+**Deliberately not requested:** `Channel.Create` and
+`ChannelMessage.ReadWrite`. They would unlock creating channels and editing or
+deleting a **channel** post, and pi is built not to depend on permissions that
+may never be granted. Channel posts are created, edited and deleted in the Teams
+client; posting, replying and reacting in channels work without them.
+
+**Also not covered:** `findMeetingTimes` and anything that reads another person's
+*appointments* need `Calendars.Read.Shared`. `teams_availability` uses
+`getSchedule` instead, which is free/busy only — no extra consent, and no view
+of what people are actually doing.
+
 ## 4. Consent
 
 **API permissions** → **Grant admin consent** — only for the two scopes that

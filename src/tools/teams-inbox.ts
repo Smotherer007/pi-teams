@@ -47,6 +47,7 @@ export const teamsInboxTool = {
 	promptGuidelines: [
 		"Use teams_inbox for open-ended catch-up questions about Teams.",
 		"Summarize what is waiting and who is waiting on it; do not reply to anything unless the user asks.",
+		"After a catch-up, offer to clear the list with teams_mark_read — never mark a chat read unasked.",
 	],
 
 	async execute(

@@ -143,6 +143,93 @@ export async function cancelEvent(
 	}
 }
 
+/** RSVP responses Graph accepts on an invitation. */
+export type EventResponse = "accept" | "decline" | "tentativelyAccept";
+
+/**
+ * Answer a meeting invitation.
+ *
+ * This is the calendar's equivalent of saying yes out loud: with
+ * `sendResponse` the organizer is notified, which is why the tool asks for
+ * confirmation rather than doing it quietly.
+ */
+export async function respondToEvent(
+	conn: TeamsConnection,
+	eventId: string,
+	response: EventResponse,
+	options: { comment?: string; sendResponse?: boolean; signal?: AbortSignal } = {},
+): Promise<void> {
+	await graphPost(
+		conn,
+		`/me/events/${encodeURIComponent(eventId)}/${response}`,
+		{ comment: options.comment, sendResponse: options.sendResponse !== false },
+		{ signal: options.signal },
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Free / busy
+// ---------------------------------------------------------------------------
+
+/** One person's availability over the requested window. */
+export interface FreeBusyWindow {
+	/** The address Graph matched the schedule to */
+	scheduleId: string;
+	/**
+	 * One character per slot, starting at the window start:
+	 * `0` free, `1` tentative, `2` busy, `3` out of office, `4` working elsewhere.
+	 */
+	availabilityView: string;
+	/** Everything that was not free, with subject omitted on purpose */
+	busy: Array<{ status: string; start: string; end: string }>;
+}
+
+/**
+ * Free/busy for several people in one call.
+ *
+ * `getSchedule` is what a delegated token may read about another person's
+ * calendar — free/busy, not the appointments — and it is the reason
+ * availability works without the `.Shared` scopes that `findMeetingTimes`
+ * insists on. Subjects are reported by Graph but dropped here: knowing that
+ * somebody is busy is the point, knowing why is their business.
+ */
+export async function getSchedule(
+	conn: TeamsConnection,
+	input: {
+		schedules: string[];
+		start: string;
+		end: string;
+		timeZone: string;
+		/** Slot width in minutes; Graph allows 5–1440 */
+		intervalMinutes?: number;
+		signal?: AbortSignal;
+	},
+): Promise<FreeBusyWindow[]> {
+	const raw = await graphPost<Raw>(conn, "/me/calendar/getSchedule", {
+		schedules: input.schedules,
+		startTime: { dateTime: input.start, timeZone: input.timeZone },
+		endTime: { dateTime: input.end, timeZone: input.timeZone },
+		availabilityViewInterval: Math.min(Math.max(input.intervalMinutes ?? 30, 5), 1440),
+	}, {
+		signal: input.signal,
+		// Without this the busy blocks come back in UTC while the view is indexed
+		// in the requested zone, and the two would not line up.
+		headers: { Prefer: `outlook.timezone="${input.timeZone}"` },
+	});
+
+	return (raw?.value ?? []).map((entry: Raw) => ({
+		scheduleId: entry.scheduleId ?? "",
+		availabilityView: entry.availabilityView ?? "",
+		busy: (entry.scheduleItems ?? [])
+			.filter((item: Raw) => item.status && item.status !== "free")
+			.map((item: Raw) => ({
+				status: item.status,
+				start: item.start?.dateTime ?? "",
+				end: item.end?.dateTime ?? "",
+			})),
+	}));
+}
+
 /** Ad-hoc meeting link with no calendar entry. */
 export async function createOnlineMeeting(
 	conn: TeamsConnection,

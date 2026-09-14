@@ -51,10 +51,13 @@ import {
 	teamsReplyChannelMessageTool,
 	teamsSendChannelMessageTool,
 } from "../tools/teams-send-channel-message.ts";
-import { teamsCreateChannelTool } from "../tools/teams-create-channel.ts";
 import { teamsListFilesTool } from "../tools/teams-list-files.ts";
 import { teamsSearchMessagesTool } from "../tools/teams-search-messages.ts";
 import { teamsReactTool } from "../tools/teams-react.ts";
+import { teamsMarkReadTool } from "../tools/teams-mark-read.ts";
+import { teamsUpdateMessageTool } from "../tools/teams-update-message.ts";
+import { teamsChatMembersTool } from "../tools/teams-chat-members.ts";
+import { teamsAvailabilityTool } from "../tools/teams-availability.ts";
 import { teamsDeleteMessageTool } from "../tools/teams-delete-message.ts";
 import { teamsInboxTool } from "../tools/teams-inbox.ts";
 import { teamsWatchTool } from "../tools/teams-watch.ts";
@@ -68,6 +71,7 @@ import {
 	teamsCreateMeetingTool,
 	teamsGetMeetingTool,
 	teamsListMeetingsTool,
+	teamsRespondInviteTool,
 	teamsUpdateMeetingTool,
 } from "../tools/teams-meetings.ts";
 
@@ -94,16 +98,18 @@ const tools = [
 	teamsReadChatTool,
 	teamsSendChatMessageTool,
 	teamsCreateChatTool,
+	teamsMarkReadTool,
+	teamsChatMembersTool,
 	// Channels
 	teamsReadChannelTool,
 	teamsReadThreadTool,
 	teamsSendChannelMessageTool,
 	teamsReplyChannelMessageTool,
-	teamsCreateChannelTool,
 	teamsListFilesTool,
 	// Cross-cutting
 	teamsSearchMessagesTool,
 	teamsReactTool,
+	teamsUpdateMessageTool,
 	teamsDeleteMessageTool,
 	teamsInboxTool,
 	// Presence
@@ -113,8 +119,10 @@ const tools = [
 	// Calendar
 	teamsListMeetingsTool,
 	teamsGetMeetingTool,
+	teamsAvailabilityTool,
 	teamsCreateMeetingTool,
 	teamsUpdateMeetingTool,
+	teamsRespondInviteTool,
 	teamsCancelMeetingTool,
 ];
 
