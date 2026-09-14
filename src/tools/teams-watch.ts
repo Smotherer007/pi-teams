@@ -122,9 +122,8 @@ export const teamsWatchTool = {
 	name: "teams_watch",
 	description:
 		"Control listen mode: pi polls your Teams chats and turns an incoming message into a prompt it answers. " +
-		"A chat wakes it when it has moved since pi last looked, so switching listen mode on also answers " +
-		"what arrived while pi was not running; only the very first run on an account records history " +
-		"without answering it. " +
+		"A chat wakes it when it has moved since pi last looked, so switching listen mode on also answers "
+			+ "what arrived while pi was not running. " +
 		"Use action 'status' to see the current settings, 'enable' or 'disable' to switch it, and the optional " +
 		"fields to narrow what may wake pi (chat patterns, mentions only, interval, cooldown, hourly limit). " +
 		"The watcher runs in the extension session; this tool changes the configuration it reads.",
@@ -223,7 +222,7 @@ export const teamsWatchTool = {
 							"",
 							...runtimeLines(runtime, conn),
 							"",
-							...CURSOR_NOTES,
+							CURSOR_NOTES,
 						].join("\n"),
 						{ watch, runtime },
 					);
