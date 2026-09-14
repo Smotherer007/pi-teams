@@ -17,10 +17,13 @@ import {
 	isWatchedChat,
 	isWatchedSender,
 	mentionsMe,
+	noteDeferral,
 	noteWake,
 	openMessages,
 	pruneState,
+	settleChat,
 	shouldWake,
+	waitingCount,
 	wakesThisHour,
 } from "../src/watch/index.ts";
 import { composeWatchPrompt } from "../src/watch/prompt.ts";
@@ -169,6 +172,33 @@ describe("shouldWake", () => {
 		assert.equal(shouldWake(chat(), message(), ME, limit, state, NOW + 3600_001).wake, true);
 	});
 
+	test("a cooldown says how long to wait instead of writing the chat off", () => {
+		const state = createWatchState();
+		noteWake(state, "chat-1", NOW);
+		const decision = shouldWake(chat(), message(), ME, watch(), state, NOW + 10_000);
+		assert.equal(decision.wake, false);
+		assert.equal(decision.wake === false ? decision.retryAfterMs : undefined, 290_000);
+	});
+
+	test("the hourly limit says when the next slot frees up", () => {
+		const state = createWatchState();
+		const limit = watch({ maxTriggersPerHour: 2, cooldownSeconds: 0 });
+		noteWake(state, "chat-a", NOW - 120_000);
+		noteWake(state, "chat-b", NOW - 60_000);
+
+		const decision = shouldWake(chat(), message(), ME, limit, state, NOW);
+		assert.equal(decision.wake, false);
+		// The oldest wake has to leave the sliding window first.
+		assert.equal(decision.wake === false ? decision.retryAfterMs : undefined, 3_480_000);
+	});
+
+	test("a final skip carries no retry, so the chat may be written off", () => {
+		const from = watch({ from: ["Bernd*"] });
+		const decision = shouldWake(chat(), message(), ME, from, createWatchState(), NOW);
+		assert.equal(decision.wake, false);
+		assert.equal(decision.wake === false ? decision.retryAfterMs : undefined, undefined);
+	});
+
 	test("ignores a deleted message", () => {
 		const deleted = message({ deletedDateTime: new Date(NOW).toISOString() });
 		assert.equal(shouldWake(chat(), deleted, ME, watch(), createWatchState(), NOW).wake, false);
@@ -199,7 +229,7 @@ describe("chatsToExamine", () => {
 		const state = createWatchState();
 		const first = chat();
 		state.seen.set(first.id, activityMarker(first));
-		assert.deepEqual(chatsToExamine(state, [first], watch()), []);
+		assert.deepEqual(chatsToExamine(state, [first], watch(), NOW), []);
 	});
 
 	test("examines a chat that moved while pi was not running, however long ago", () => {
@@ -207,29 +237,29 @@ describe("chatsToExamine", () => {
 		// of the test, or exactly the messages the user switched it on for would
 		// be dropped.
 		const old = chat({ lastUpdated: new Date(NOW - 30 * 24 * 3600_000).toISOString() });
-		assert.equal(chatsToExamine(createWatchState(), [old], watch()).length, 1);
+		assert.equal(chatsToExamine(createWatchState(), [old], watch(), NOW).length, 1);
 	});
 
 	test("examines a chat that just moved", () => {
 		const fresh = chat({ lastUpdated: new Date(NOW - 30_000).toISOString() });
-		assert.equal(chatsToExamine(createWatchState(), [fresh], watch()).length, 1);
+		assert.equal(chatsToExamine(createWatchState(), [fresh], watch(), NOW).length, 1);
 	});
 
 	test("a restored cursor is what an empty state would have examined", () => {
 		const restored = chat({ lastUpdated: new Date(NOW - 30_000).toISOString() });
 		const state = createWatchState([[restored.id, activityMarker(restored)]]);
-		assert.deepEqual(chatsToExamine(state, [restored], watch()), []);
+		assert.deepEqual(chatsToExamine(state, [restored], watch(), NOW), []);
 	});
 
 	test("a chat the chat list cannot date is never a candidate", () => {
 		const undated = chat({ lastUpdated: undefined });
-		assert.deepEqual(chatsToExamine(createWatchState(), [undated], watch()), []);
+		assert.deepEqual(chatsToExamine(createWatchState(), [undated], watch(), NOW), []);
 	});
 
 	test("respects the chat filter", () => {
 		const fresh = chat({ lastUpdated: new Date(NOW - 30_000).toISOString() });
 		const narrowed = watch({ chats: ["Vertrieb*"] });
-		assert.deepEqual(chatsToExamine(createWatchState(), [fresh], narrowed), []);
+		assert.deepEqual(chatsToExamine(createWatchState(), [fresh], narrowed, NOW), []);
 	});
 });
 
@@ -269,6 +299,34 @@ describe("state bookkeeping", () => {
 		assert.equal(state.seen.size, 1000);
 		assert.equal(state.seen.has("chat-0"), true);
 		assert.equal(state.seen.has("chat-1004"), false);
+	});
+});
+
+describe("deferral bookkeeping", () => {
+	test("settling a chat clears its deferral and writes the marker", () => {
+		const state = createWatchState();
+		noteDeferral(state, "chat-1", NOW + 60_000);
+		assert.equal(waitingCount(state, NOW), 1);
+
+		settleChat(state, "chat-1", "marker-1");
+		assert.equal(waitingCount(state, NOW), 0);
+		assert.equal(state.seen.get("chat-1"), "marker-1");
+	});
+
+	test("a chat is not examined while it waits, and is again afterwards", () => {
+		const state = createWatchState();
+		const waiting = chat();
+		noteDeferral(state, waiting.id, NOW + 60_000);
+
+		assert.deepEqual(chatsToExamine(state, [waiting], watch(), NOW + 30_000), []);
+		assert.equal(chatsToExamine(state, [waiting], watch(), NOW + 60_001).length, 1);
+	});
+
+	test("pruning forgets a wait that is over", () => {
+		const state = createWatchState();
+		noteDeferral(state, "chat-1", NOW - 1);
+		pruneState(state, NOW);
+		assert.equal(waitingCount(state, NOW), 0);
 	});
 });
 

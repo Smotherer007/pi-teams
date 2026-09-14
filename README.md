@@ -87,7 +87,10 @@ What it does, and what it deliberately does not:
   message is still unread for you in Teams. So switching listen mode back on
   answers what you missed while pi was not running — and a chat you already read
   in Teams stays quiet. A backlog is drained a few chats per tick and capped by
-  `maxTriggersPerHour`, so a long absence does not produce a burst.
+  `maxTriggersPerHour`, so a long absence does not produce a burst. A chat held
+  back by its `cooldownSeconds`, or by that hourly cap, is *delayed, never
+  dropped*: it keeps its place in line and is answered as soon as the wait is
+  over. `teams_watch action: status` shows how many are waiting right now.
 - **Never wakes for its own messages.** pi posts as you, so its own reply comes
   back as "my own message" and stops the loop.
 - **Respects the read rules.** A chat excluded by `permissions.read.chats` is
@@ -652,7 +655,8 @@ network connection.
 | "Blocked by configuration" | Your own scope rules. `teams_permissions action: test` shows which rule |
 | "cannot run on an app-only token" | Set `authMode: "interactive"` and run `teams_login` |
 | 403 reading channel messages | `ChannelMessage.Read.All` needs **admin** consent — see "Who has to approve what" |
-| Listen mode does nothing | `teams_watch action: status` says whether it is enabled and running. Only messages arriving *after* it was switched on wake pi |
+| Listen mode does nothing | `teams_watch action: status` says whether it is enabled and running, how many chats it tracks, and where the cursor lives. A chat you have already read in Teams stays quiet by design, and one held back by its cooldown or the hourly cap shows up as *waiting* |
+| Listen mode never answers one specific chat | `waiting` in `teams_watch action: status` says whether it is sitting out a `cooldownSeconds` window; chats it has already decided about are in the cursor under `~/.pi/agent/pi-teams-watch/` |
 | Listen mode answers too much | Narrow `watch.chats` and `watch.from`, raise `cooldownSeconds`, lower `maxTriggersPerHour` |
 | Listen mode stopped by itself | `teams_watch action: status` shows the last polling error; a revoked session or a sleeping laptop is the usual cause, and it resumes on its own |
 | Throttled | Graph rate limit; the client retries with back-off, then reports it |

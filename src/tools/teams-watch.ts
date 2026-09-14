@@ -46,7 +46,8 @@ const CURSOR_NOTES = [
 		+ "on therefore answers what you missed, and a chat you have already read in Teams stays quiet.",
 	"",
 	"A backlog is drained over several ticks and capped by the hourly wake limit, so a long absence does "
-		+ "not produce a burst of answers.",
+		+ "not produce a burst of answers. A chat held back by its cooldown or by that limit is delayed, "
+		+ "never dropped: it stays open and is answered as soon as the wait is over.",
 ].join("\n");
 
 /** Renders the effective settings the same way the config file would. */
@@ -93,6 +94,12 @@ function runtimeLines(runtime: WatchRuntimeStatus | undefined, conn: TeamsConnec
 		`- chats tracked: ${runtime.trackedChats}`,
 		`- woken this hour: ${runtime.wakesThisHour}`,
 	];
+	if (runtime.waiting > 0) {
+		lines.push(
+			`- waiting: ${runtime.waiting} chat(s) — held back by their cooldown or by the wake limit, "
+				+ "and answered once that clears`,
+		);
+	}
 	if (runtime.lastTickAt) {
 		lines.push(`- last poll: ${new Date(runtime.lastTickAt).toLocaleTimeString()}`);
 	}

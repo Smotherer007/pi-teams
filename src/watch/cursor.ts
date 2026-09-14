@@ -15,6 +15,11 @@
  * the stored one. Written after every tick, so a crash costs nothing but the
  * tick it died in.
  *
+ * What lands here is a *decision*, not a sighting: a chat whose wake was only
+ * postponed — inside its cooldown, or over the hourly limit — is deliberately
+ * kept out of the file (see `noteDeferral` in ./index.ts), because an entry here
+ * means the watcher will never look at that chat again.
+ *
  * One file per account **and** tenant, next to the token cache: two accounts in
  * one process must not share a cursor, and neither must a guest tenant beneath
  * the same account.

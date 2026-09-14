@@ -51,6 +51,20 @@ export interface WatchState {
 	lastTriggered: Map<string, number>;
 	/** epoch ms of every wake, pruned to the last hour */
 	triggers: number[];
+	/**
+	 * chatId → epoch ms before which this chat must not be looked at again.
+	 *
+	 * The counterpart of `seen`, and the whole point of the pair: a chat whose
+	 * decision was only *postponed* — inside its cooldown, or held back by the
+	 * hourly wake limit — is deliberately **not** written to the cursor, because
+	 * the cursor means "pi has looked at this and will not look again". A message
+	 * written down there is a message nobody ever answers.
+	 *
+	 * In memory on purpose: it only saves the Graph calls of re-examining the chat
+	 * every tick until the wait is over, so losing it on a restart costs one extra
+	 * examination — never a message.
+	 */
+	retryAfter: Map<string, number>;
 }
 
 /**
@@ -67,7 +81,42 @@ export const MAX_CHAT_ATTEMPTS = 3;
  *   Omitted means the very first run, which is the only run that skips history.
  */
 export function createWatchState(seen?: Iterable<[string, string]>): WatchState {
-	return { seen: new Map(seen), attempts: new Map(), lastTriggered: new Map(), triggers: [] };
+	return {
+		seen: new Map(seen),
+		attempts: new Map(),
+		lastTriggered: new Map(),
+		triggers: [],
+		retryAfter: new Map(),
+	};
+}
+
+/**
+ * Record that a chat has been looked at and decided.
+ *
+ * "Decided" is the operative word: only a final decision may write the cursor,
+ * since the cursor is what stops the watcher from ever looking at that chat
+ * again. A postponed chat goes to `noteDeferral` instead.
+ */
+export function settleChat(state: WatchState, chatId: string, marker: string): void {
+	state.seen.set(chatId, marker);
+	state.retryAfter.delete(chatId);
+}
+
+/**
+ * Keep a chat open — and out of the batch — until `until`.
+ *
+ * Not writing the cursor is what keeps the message; this is only the throttle
+ * on how often the chat is re-read while it waits.
+ */
+export function noteDeferral(state: WatchState, chatId: string, until: number): void {
+	state.retryAfter.set(chatId, until);
+}
+
+/** How many chats are waiting out a cooldown or the wake limit right now. */
+export function waitingCount(state: WatchState, now: number): number {
+	let waiting = 0;
+	for (const until of state.retryAfter.values()) if (until > now) waiting += 1;
+	return waiting;
 }
 
 /** Record a failed examination; true while the chat is still worth retrying. */
@@ -122,6 +171,12 @@ export function pruneState(state: WatchState, now: number): void {
 		state.seen = new Map(byMarker.slice(0, MAX_CURSOR_ENTRIES));
 	}
 
+	// Waiting chats expire by themselves — a deferral can never outlive the hour
+	// the wake limit looks at, so there is nothing to bound here.
+	for (const [chatId, until] of state.retryAfter) {
+		if (until <= now) state.retryAfter.delete(chatId);
+	}
+
 	// Counters are bounded by size rather than by the cursor: a chat that keeps
 	// failing is deliberately *not* in the cursor, and its counter is what stops
 	// it from being retried forever.
@@ -149,6 +204,7 @@ export function chatsToExamine(
 	state: WatchState,
 	chats: ChatSummary[],
 	watch: ResolvedWatchConfig,
+	now: number,
 ): ChatSummary[] {
 	return chats.filter((chat) => {
 		if (!isWatchedChat(chat, watch)) return false;
@@ -158,7 +214,15 @@ export function chatsToExamine(
 		// "new" — and never marked, which costs no Graph call at all.
 		if (!marker) return false;
 
-		return state.seen.get(chat.id) !== marker;
+		if (state.seen.get(chat.id) === marker) return false;
+
+		// Moved, but the decision on it is only postponed: the chat is still open
+		// (it is not in the cursor), but looking at it again right now would only
+		// re-read the same message. Deliberately after the cursor check, and
+		// deliberately out of the batch rather than in it — a chat waiting out its
+		// cooldown must not cost another chat its slot in the tick.
+		const until = state.retryAfter.get(chat.id);
+		return until === undefined || until <= now;
 	});
 }
 
@@ -244,10 +308,38 @@ export function openMessages(
 // Whether a message should wake pi
 // ---------------------------------------------------------------------------
 
-export type WakeDecision = { wake: true } | { wake: false; reason: string };
+export type WakeDecision =
+	| { wake: true }
+	| {
+			wake: false;
+			reason: string;
+			/**
+			 * Set when the skip is only for now: ms to wait before looking again.
+			 * Absent means the decision is final — this message is not for pi.
+			 */
+			retryAfterMs?: number;
+		};
 
 const WAKE: WakeDecision = { wake: true };
+
+/** Final: this message will never be one of pi's. */
 const skip = (reason: string): WakeDecision => ({ wake: false, reason });
+
+/** Only for now: the message stays open and is looked at again after the wait. */
+const defer = (reason: string, retryAfterMs: number): WakeDecision => ({
+	wake: false,
+	reason,
+	retryAfterMs: Math.max(MIN_RETRY_MS, Math.round(retryAfterMs)),
+});
+
+/**
+ * Floor on a retry delay.
+ *
+ * A cooldown that is a second away, or a wake limit about to slide, would
+ * otherwise turn the deferral into "examine this chat again on every tick" —
+ * the point of waiting is to not pay for the same Graph calls until it matters.
+ */
+const MIN_RETRY_MS = 5_000;
 
 /**
  * Is the newest message in this chat still unread for the user?
@@ -275,8 +367,13 @@ export function isUnread(chat: ChatSummary, lastMessageReadAt?: string): boolean
  * Should this message wake pi?
  *
  * Ordered so the cheapest and most obvious reason to stay quiet is also the
- * one that gets reported — a wrong wake costs a model turn, a wrong silence
- * costs nothing but the reason in the log.
+ * one that gets reported.
+ *
+ * The two kinds of "no" are told apart here, and it matters: a message from
+ * somebody pi does not listen to will never become an answer, while a chat in
+ * its cooldown or a burst over the hourly limit is only waiting. Those two are
+ * returned with a `retryAfterMs`, and the loop uses it to keep the chat open
+ * instead of writing it off in the cursor.
  */
 export function shouldWake(
 	chat: ChatSummary,
@@ -293,15 +390,32 @@ export function shouldWake(
 	if (!isWatchedSender(message, watch)) return skip("the sender is outside the configured listen list");
 	if (watch.mentionOnly && !mentionsMe(message, me)) return skip("the chat is set to mentions only");
 	if (watch.maxTriggersPerHour > 0 && wakesThisHour(state, now) >= watch.maxTriggersPerHour) {
-		return skip("the hourly wake limit is reached");
+		return defer(
+			"the hourly wake limit is reached",
+			nextWakeSlot(state, now, watch.maxTriggersPerHour) - now,
+		);
 	}
 
 	const last = state.lastTriggered.get(chat.id);
 	if (last !== undefined && now - last < watch.cooldownSeconds * 1000) {
-		return skip("this chat is inside its cooldown");
+		return defer("this chat is inside its cooldown", last + watch.cooldownSeconds * 1000 - now);
 	}
 
 	return WAKE;
+}
+
+/**
+ * When the next wake fits under the hourly limit.
+ *
+ * The limit is a sliding window, not a bucket that empties on the hour, so the
+ * answer is "when the oldest wake of the last hour falls out of it". That is
+ * what keeps a burst — a Monday morning, a release — from silencing a chat for
+ * the rest of the hour.
+ */
+export function nextWakeSlot(state: WatchState, now: number, maxPerHour: number): number {
+	const recent = state.triggers.filter((at) => now - at < 3600_000).sort((a, b) => a - b);
+	if (maxPerHour < 1 || recent.length < maxPerHour) return now;
+	return recent[recent.length - maxPerHour] + 3600_000;
 }
 
 /**

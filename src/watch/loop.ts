@@ -30,12 +30,15 @@ import {
 	chatsToExamine,
 	createWatchState,
 	isUnread,
+	noteDeferral,
 	noteFailure,
 	noteSuccess,
 	noteWake,
 	openMessages,
 	pruneState,
+	settleChat,
 	shouldWake,
+	waitingCount,
 	wakesThisHour,
 	WATCH_MESSAGE_WINDOW,
 	type WatchState,
@@ -78,6 +81,12 @@ export interface WatchRuntimeStatus {
 	wakesThisHour: number;
 	/** Chats seen so far — a quick sanity signal that the loop is alive */
 	trackedChats: number;
+	/**
+	 * Chats still open but held back right now — inside their cooldown, or waiting
+	 * for a slot under the hourly limit. The visible form of "not lost, not yet
+	 * answered": without it, a burst that hits the limit looks like silence.
+	 */
+	waiting: number;
 	/** How many chats had moved when the watcher came up, before the per-tick cap */
 	catchUp?: number;
 	/** Of those, how many the user had already read in Teams */
@@ -132,6 +141,8 @@ export interface WatchTickResult {
 	pending: number;
 	/** Of the examined ones, how many the user had already read */
 	alreadyRead: number;
+	/** Of the examined ones, how many were only postponed */
+	deferred: number;
 	wakes: WatchEvent[];
 }
 
@@ -143,6 +154,12 @@ export interface WatchTickResult {
  * without one every chat is compared against the user's own read state on the
  * very first tick. What keeps that from becoming a flood is the per-tick cap
  * and the hourly wake limit, not a window that quietly drops messages.
+ *
+ * The one rule the whole function hangs on: **the cursor is written only for a
+ * decision that is final.** It is the record of what pi has looked at, so what
+ * lands in it is never looked at again — which is right for a message from
+ * somebody pi does not listen to, and wrong for a message that was merely too
+ * early. Those go to `noteDeferral` instead and keep their place in line.
  */
 export async function runWatchTick(
 	deps: WatchTickDeps,
@@ -155,17 +172,22 @@ export async function runWatchTick(
 
 	const chats = (await deps.listChats()).filter((chat) => deps.allowed?.(chat) ?? true);
 
-	const candidates = chatsToExamine(state, chats, watch);
+	const candidates = chatsToExamine(state, chats, watch, now);
 	const batch = candidates.slice(0, MAX_EXAMINATIONS_PER_TICK);
 
 	const wakes: WatchEvent[] = [];
 	let alreadyRead = 0;
+	let deferred = 0;
 
 	for (const chat of batch) {
-		// Mark first, then undo the mark if this chat cannot be examined: a chat
-		// that fails must not be retried forever, but a token renewal must not turn
-		// into a message nobody ever answers.
-		state.seen.set(chat.id, activityMarker(chat));
+		const marker = activityMarker(chat);
+
+		// A chat that cannot be read must not occupy a batch slot on every tick, and
+		// a token renewal must not turn into a message nobody ever answers: it is
+		// written off only once it has used up its attempts.
+		const failed = () => {
+			if (!noteFailure(state, chat.id)) settleChat(state, chat.id, marker);
+		};
 
 		// The read cursor first: a chat the user has already opened in Teams ends
 		// here, one Graph call in, before the message is even fetched.
@@ -173,12 +195,13 @@ export async function runWatchTick(
 		try {
 			readAt = await deps.readState(chat.id);
 		} catch {
-			if (noteFailure(state, chat.id)) state.seen.delete(chat.id);
+			failed();
 			continue;
 		}
 
 		if (!isUnread(chat, readAt)) {
 			noteSuccess(state, chat.id);
+			settleChat(state, chat.id, marker);
 			alreadyRead += 1;
 			continue;
 		}
@@ -189,19 +212,33 @@ export async function runWatchTick(
 		} catch {
 			// A single unreadable chat must not end the tick — the rest of the
 			// list is still worth examining.
-			if (noteFailure(state, chat.id)) state.seen.delete(chat.id);
+			failed();
 			continue;
 		}
 
 		noteSuccess(state, chat.id);
 
 		const message = messages.find((entry) => !entry.deletedDateTime) ?? messages[0];
-		if (!message) continue;
+		if (!message) {
+			settleChat(state, chat.id, marker);
+			continue;
+		}
 
 		const decision = shouldWake(chat, message, me, watch, state, now);
-		if (!decision.wake) continue;
+		if (!decision.wake) {
+			if (decision.retryAfterMs !== undefined) {
+				// Postponed, not answered and not written off: the chat keeps its
+				// message and waits out the cooldown or the wake limit.
+				noteDeferral(state, chat.id, now + decision.retryAfterMs);
+				deferred += 1;
+			} else {
+				settleChat(state, chat.id, marker);
+			}
+			continue;
+		}
 
 		noteWake(state, chat.id, now);
+		settleChat(state, chat.id, marker);
 
 		// The answer has to cover the whole open thread, not just its newest line:
 		// the trigger message is the reason for the wake, the backlog is the reason
@@ -217,10 +254,10 @@ export async function runWatchTick(
 	}
 
 	// Written even when nothing woke: marking a chat examined is the progress
-	// that must survive a restart.
+	// that must survive a restart. Postponed chats are absent from it on purpose.
 	if (batch.length > 0) deps.persistCursor?.(state.seen);
 
-	return { examined: batch.length, pending: candidates.length, alreadyRead, wakes };
+	return { examined: batch.length, pending: candidates.length, alreadyRead, deferred, wakes };
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +338,7 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 		intervalSeconds: watch.intervalSeconds,
 		wakesThisHour: 0,
 		trackedChats: 0,
+		waiting: 0,
 	};
 
 	const schedule = (delayMs: number) => {
@@ -346,6 +384,7 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 			status.lastError = undefined;
 			status.wakesThisHour = wakesThisHour(state, status.lastTickAt);
 			status.trackedChats = state.seen.size;
+			status.waiting = waitingCount(state, status.lastTickAt);
 
 			for (const event of result.wakes) {
 				status.lastWakeAt = event.wokeAt;
