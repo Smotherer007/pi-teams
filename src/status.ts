@@ -6,7 +6,7 @@
  */
 
 import type { TeamsConnection } from "./config/index.ts";
-import { getToken, isFresh } from "./auth/token-store.ts";
+import { readCacheSummary } from "./auth/cache-plugin.ts";
 import { formatPermissions } from "./config/scope.ts";
 
 /** Immutable snapshot of the active Teams connection. */
@@ -34,7 +34,7 @@ export function buildConnectionCard(
 ): ConnectionCard | undefined {
 	if (!conn) return undefined;
 
-	const token = getToken(conn.account, conn.tenantId);
+	const cache = readCacheSummary(conn.account, conn.tenantId);
 
 	return {
 		account: conn.account,
@@ -43,9 +43,11 @@ export function buildConnectionCard(
 		tenantId: conn.tenantId,
 		authMode: conn.authMode,
 		safetyLevel: conn.safetyLevel,
-		user: token?.user?.upn ?? token?.user?.displayName,
-		signedIn: isFresh(token) || !!token?.refreshToken,
-		expiresAt: token ? new Date(token.expiresAt).toISOString() : undefined,
+		user: cache.username ?? cache.name,
+		// A cached session counts as signed in even when the access token has
+		// expired: MSAL renews it silently on the next call.
+		signedIn: cache.present,
+		expiresAt: cache.expiresAt ? new Date(cache.expiresAt).toISOString() : undefined,
 		otherAccounts: conn.allAccounts.map((a) => a.name).filter((name) => name !== conn.account),
 		permissionSummary: formatPermissions(conn.permissions),
 	};
@@ -78,9 +80,21 @@ export function formatStatusText(card: ConnectionCard | undefined): string {
 	if (card.tenant !== card.account) lines.push(`- **Tenant:** ${card.tenant}`);
 	lines.push(`- **Tenant ID:** ${card.tenantId}`);
 	lines.push(`- **Acting as:** ${card.signedIn ? (card.user ?? "(signed in)") : "not signed in — run teams_login"}`);
-	lines.push(`- **Auth mode:** ${card.authMode}${card.authMode === "client-credentials" ? " (app-only — cannot post as a person)" : ""}`);
+	lines.push(
+		`- **Auth mode:** ${card.authMode}${
+			card.authMode === "client-credentials"
+				? " (app-only — cannot post as a person)"
+				: card.authMode === "interactive"
+					? " (browser sign-in)"
+					: " (device code)"
+		}`,
+	);
 	lines.push(`- **Safety level:** ${card.safetyLevel}`);
-	if (card.expiresAt) lines.push(`- **Token expires:** ${new Date(card.expiresAt).toLocaleString()}`);
+	if (card.expiresAt) {
+		lines.push(
+			`- **Access token expires:** ${new Date(card.expiresAt).toLocaleString()} (renewed silently)`,
+		);
+	}
 	if (card.otherAccounts.length > 0) {
 		lines.push(`- **Other accounts:** ${card.otherAccounts.join(", ")}`);
 	}

@@ -18,7 +18,7 @@
  * which channel a message is actually headed for.
  */
 
-import type { SafetyLevel, TeamsConnection } from "../config/index.ts";
+import type { ResolvedAuthMode, SafetyLevel, TeamsConnection } from "../config/index.ts";
 import { checkScope, type ScopeCategory, type ScopeMode } from "../config/scope.ts";
 import { ScopeDeniedError } from "../utils/errors.ts";
 import { MUTATION_TOOLS } from "../tools/tool-names.ts";
@@ -47,7 +47,7 @@ export const LOCAL_CONFIG_TOOLS = new Set<string>(["teams_setup", "teams_logout"
  */
 export function blockReason(
 	safetyLevel: SafetyLevel,
-	authMode: "device-code" | "client-credentials",
+	authMode: ResolvedAuthMode,
 	toolName: string,
 ): string | undefined {
 	if (!isMutationTool(toolName)) return undefined;
@@ -64,7 +64,7 @@ export function blockReason(
 		return (
 			`"${toolName}" cannot run on an app-only token. Microsoft Graph only permits app-only writes to ` +
 			`chats and channels for migration scenarios, so pi cannot post as a person this way. ` +
-			`Set authMode to "device-code" for this account and run teams_login.`
+			`Set authMode to "interactive" for this account and run teams_login.`
 		);
 	}
 

@@ -12,7 +12,8 @@ import {
 	setSafetyLevel,
 	validateSafetyLevel,
 } from "../config/index.ts";
-import { deleteToken, getToken, isFresh } from "../auth/token-store.ts";
+import { readCacheSummary, removeCache } from "../auth/cache-plugin.ts";
+import { resetApps } from "../auth/index.ts";
 import { clearUserCache, errorResult, run, textResult, type ToolResult } from "./shared.ts";
 
 interface AccountsParams {
@@ -69,12 +70,12 @@ export const teamsAccountsTool = {
 					const lines = ["## Configured Teams accounts", ""];
 					for (const account of config.accounts) {
 						const isDefault = config.defaultAccount === account.name;
-						const token = getToken(account.name, account.tenantId);
-						const state = isFresh(token)
-							? "signed in"
-							: token?.refreshToken
-								? "session saved"
-								: "not signed in";
+						const cache = readCacheSummary(account.name, account.tenantId);
+						const state = !cache.present
+							? "not signed in"
+							: cache.fresh
+								? "signed in"
+								: "session saved";
 
 						lines.push(
 							`### ${account.displayName ?? account.name}${isDefault ? " (default)" : ""}`,
@@ -83,16 +84,16 @@ export const teamsAccountsTool = {
 							`- tenant: ${account.tenantId}`,
 							`- auth mode: ${account.authMode ?? "device-code"}`,
 							`- safety: ${account.safetyLevel ?? config.safetyLevel ?? "confirm"}`,
-							`- status: ${state}${token?.user?.upn ? ` as ${token.user.upn}` : ""}`,
+							`- status: ${state}${cache.username ? ` as ${cache.username}` : ""}`,
 						);
 
 						for (const tenant of account.tenants ?? []) {
-							const tenantToken = getToken(account.name, tenant.tenantId);
-							const tenantState = isFresh(tenantToken)
-								? "signed in"
-								: tenantToken?.refreshToken
-									? "session saved"
-									: "not signed in";
+							const tenantCache = readCacheSummary(account.name, tenant.tenantId);
+							const tenantState = !tenantCache.present
+								? "not signed in"
+								: tenantCache.fresh
+									? "signed in"
+									: "session saved";
 							lines.push(
 								`  - tenant \`${tenant.name}\` (${tenant.tenantId}) — ${tenantState}` +
 									`${tenant.safetyLevel ? `, safety: ${tenant.safetyLevel}` : ""}`,
@@ -125,7 +126,10 @@ export const teamsAccountsTool = {
 							.find((a) => a.name === params.account)
 							?.tenants?.find((t) => t.name === params.tenant);
 						const removed = removeTenant(params.account, params.tenant);
-						if (removed && tenantConfig) deleteToken(params.account, tenantConfig.tenantId);
+						if (removed && tenantConfig) {
+							removeCache(params.account, tenantConfig.tenantId);
+							resetApps();
+						}
 						return removed
 							? textResult(`✅ Removed tenant "${params.tenant}" from account "${params.account}".`, {})
 							: errorResult(`Tenant "${params.tenant}" not found in account "${params.account}".`);
@@ -134,10 +138,11 @@ export const teamsAccountsTool = {
 					const accountConfig = config.accounts.find((a) => a.name === params.account);
 					const removed = removeAccount(params.account);
 					if (removed && accountConfig) {
-						deleteToken(params.account, accountConfig.tenantId);
+						removeCache(params.account, accountConfig.tenantId);
 						for (const tenant of accountConfig.tenants ?? []) {
-							deleteToken(params.account, tenant.tenantId);
+							removeCache(params.account, tenant.tenantId);
 						}
+						resetApps();
 					}
 					clearUserCache();
 					return removed

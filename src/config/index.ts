@@ -37,6 +37,7 @@ import {
 	type PermissionBlock,
 	type ResolvedPermissions,
 } from "./scope.ts";
+import { canOpenBrowser } from "../utils/environment.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,15 +46,23 @@ import {
 /**
  * How pi obtains a token.
  *
- * - `device-code`: delegated. pi acts **as the signed-in user** — messages are
- *   sent from their account and everything they can see, pi can see.
+ * - `interactive`: delegated. The browser opens at the Microsoft sign-in page
+ *   and MSAL catches the redirect on a loopback port. pi then acts **as the
+ *   signed-in user** — messages come from their account, and everything they
+ *   can see, pi can see.
+ * - `device-code`: delegated as well, but the user types a short code on
+ *   another device. For SSH sessions, containers, and anything headless.
  * - `client-credentials`: app-only. No user identity; Microsoft Graph does not
  *   allow posting chat or channel messages this way (outside of migration
  *   scenarios), so writes are refused with an explanation.
- * - `auto`: use `client-credentials` when a secret is configured, otherwise
- *   `device-code`.
+ * - `auto`: `client-credentials` when a secret is configured, otherwise
+ *   `interactive` where a browser is reachable and `device-code` where it is
+ *   not.
  */
-export type AuthMode = "device-code" | "client-credentials" | "auto";
+export type AuthMode = "interactive" | "device-code" | "client-credentials" | "auto";
+
+/** An auth mode after "auto" has been resolved away. */
+export type ResolvedAuthMode = "interactive" | "device-code" | "client-credentials";
 
 /** Safety level for mutation operations. */
 export type SafetyLevel = "open" | "confirm" | "readonly";
@@ -72,6 +81,8 @@ export interface TenantConfig {
 	authMode?: AuthMode;
 	/** Requested Graph scopes override */
 	scopes?: string[];
+	/** Fixed loopback port for the browser sign-in redirect */
+	loopbackPort?: number;
 	/** Safety level override — most specific wins */
 	safetyLevel?: SafetyLevel;
 	/** Scope rules layered on top of the account's */
@@ -94,6 +105,14 @@ export interface AccountConfig {
 	authMode?: AuthMode;
 	/** Requested Graph scopes (default: DEFAULT_SCOPES) */
 	scopes?: string[];
+	/**
+	 * Fixed loopback port for the browser sign-in redirect.
+	 *
+	 * Only needed where the app registration lists an exact redirect URI such
+	 * as `http://localhost:3000`; by default MSAL picks a free port and Entra
+	 * accepts any port on localhost for a public client.
+	 */
+	loopbackPort?: number;
 	/** Safety level override */
 	safetyLevel?: SafetyLevel;
 	/** Scope rules layered on top of the global ones */
@@ -136,8 +155,10 @@ export interface TeamsConnection {
 	clientId: string;
 	clientSecret?: string;
 	/** Effective auth mode — never "auto" after resolution */
-	authMode: "device-code" | "client-credentials";
+	authMode: ResolvedAuthMode;
 	scopes: string[];
+	/** Fixed loopback port for the browser sign-in, when one is configured */
+	loopbackPort?: number;
 	safetyLevel: SafetyLevel;
 	permissions: ResolvedPermissions;
 	maxMessages: number;
@@ -165,13 +186,11 @@ export class ConfigError extends Error {
 /**
  * Delegated scopes requested by default.
  *
- * `offline_access` is what makes the sign-in last: without it pi would have to
- * ask for a device code again every hour.
+ * `openid`, `profile` and `offline_access` are absent on purpose: MSAL always
+ * requests them and rejects them in an explicit scope list. The lasting
+ * sign-in they buy is therefore automatic.
  */
 export const DEFAULT_SCOPES: string[] = [
-	"offline_access",
-	"openid",
-	"profile",
 	"User.Read",
 	"User.ReadBasic.All",
 	"Team.ReadBasic.All",
@@ -201,7 +220,12 @@ const DEFAULTS = {
 	authorityHost: "https://login.microsoftonline.com",
 };
 
-const VALID_AUTH_MODES = new Set<string>(["device-code", "client-credentials", "auto"]);
+const VALID_AUTH_MODES = new Set<string>([
+	"interactive",
+	"device-code",
+	"client-credentials",
+	"auto",
+]);
 const VALID_SAFETY_LEVELS = new Set<string>(["open", "confirm", "readonly"]);
 
 // ---------------------------------------------------------------------------
@@ -299,18 +323,27 @@ export function resolveEffectiveSafetyLevel(
 	);
 }
 
-/** Effective auth mode, resolving "auto" against the available credentials. */
+/**
+ * Effective auth mode, resolving "auto" against the available credentials and
+ * the environment.
+ *
+ * `browserAvailable` is injected rather than detected here so the cascade stays
+ * a pure function — the detection itself lives in ../auth/msal.ts.
+ */
 export function resolveAuthMode(
 	account: AccountConfig | undefined,
 	tenant: TenantConfig | undefined,
 	hasSecret: boolean,
-): "device-code" | "client-credentials" {
+	browserAvailable = true,
+): ResolvedAuthMode {
 	const configured =
 		validateAuthMode(tenant?.authMode) ??
 		validateAuthMode(account?.authMode) ??
 		DEFAULTS.authMode;
-	if (configured === "auto") return hasSecret ? "client-credentials" : "device-code";
-	return configured;
+
+	if (configured !== "auto") return configured;
+	if (hasSecret) return "client-credentials";
+	return browserAvailable ? "interactive" : "device-code";
 }
 
 // ---------------------------------------------------------------------------
@@ -395,7 +428,7 @@ export function resolveConnection(
 	if (missing.length > 0) throw new ConfigError(missing);
 
 	const clientSecret = tenant?.clientSecret ?? account.clientSecret ?? undefined;
-	const authMode = resolveAuthMode(account, tenant, !!clientSecret);
+	const authMode = resolveAuthMode(account, tenant, !!clientSecret, canOpenBrowser());
 
 	if (authMode === "client-credentials" && !clientSecret) {
 		throw new ConfigError(
@@ -417,6 +450,7 @@ export function resolveConnection(
 		clientId,
 		clientSecret,
 		authMode,
+		loopbackPort: tenant?.loopbackPort ?? account.loopbackPort,
 		scopes,
 		safetyLevel: resolveEffectiveSafetyLevel(config.safetyLevel, account, tenant),
 		permissions: resolvePermissions([config.permissions, account.permissions, tenant?.permissions]),
@@ -644,7 +678,7 @@ const TEMPLATE_JSON = `{
       "displayName": "Work account",
       "tenantId": "contoso.onmicrosoft.com",
       "clientId": "00000000-0000-0000-0000-000000000000",
-      "authMode": "device-code",
+      "authMode": "interactive",
       "safetyLevel": "confirm",
       "permissions": {
         "read": {

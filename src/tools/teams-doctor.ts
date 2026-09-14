@@ -13,9 +13,9 @@ import {
 	DEFAULT_SCOPES,
 	type TeamsConnection,
 } from "../config/index.ts";
-import { getToken, getTokenPath, isFresh } from "../auth/token-store.ts";
+import { getCacheDir, readCacheSummary } from "../auth/cache-plugin.ts";
 import { tokenScopes } from "../auth/jwt.ts";
-import { getAccessToken } from "../auth/index.ts";
+import { browserUnavailableReason, canOpenBrowser, getAccessToken } from "../auth/index.ts";
 import { getMe } from "../graph/me.ts";
 import { listJoinedTeams } from "../graph/teams.ts";
 import { formatGraphError, describeScope } from "../utils/errors.ts";
@@ -47,28 +47,46 @@ async function checkConnection(
 			"- ⚠️ app-only: pi cannot post messages as a person with this mode " +
 				"(Microsoft Graph restricts app-only message writes to migration scenarios)",
 		);
+	} else if (conn.authMode === "interactive" && !canOpenBrowser()) {
+		lines.push(
+			`- ⚠️ browser sign-in is configured but unavailable here (${browserUnavailableReason()}); ` +
+				"`teams_login` will use the device code flow",
+		);
 	}
 
-	const token = getToken(conn.account, conn.tenantId);
-	if (!token) {
+	const cache = readCacheSummary(conn.account, conn.tenantId);
+	if (!cache.present) {
 		lines.push("- ❌ not signed in — run `teams_login`");
 		return lines;
 	}
 
 	lines.push(
-		isFresh(token)
-			? `- ✅ token valid until ${new Date(token.expiresAt).toLocaleString()}`
-			: token.refreshToken
-				? "- ⚠️ access token expired, refresh token present (will renew on the next call)"
-				: "- ❌ token expired and no refresh token — run `teams_login`",
+		cache.fresh
+			? `- ✅ access token valid until ${new Date(cache.expiresAt!).toLocaleString()}`
+			: "- ⚠️ access token expired; MSAL renews it silently on the next call",
 	);
+	if (cache.username) lines.push(`- cached identity: ${cache.username}`);
 
-	// Consent check works offline: the scopes are inside the token.
-	const granted = tokenScopes(token.accessToken);
+	if (offline) {
+		lines.push("- _offline check: scopes and connectivity not verified_");
+		return lines;
+	}
+
+	// Everything below needs a live token. Acquiring it also proves that silent
+	// renewal works, which is the failure users actually hit.
+	let accessToken: string;
+	try {
+		const token = await getAccessToken(conn, signal);
+		accessToken = token.accessToken;
+	} catch (err) {
+		lines.push(`- ❌ could not obtain a token: ${formatGraphError(err)}`);
+		return lines;
+	}
+
+	// The granted scopes are inside the token, so this needs no extra call.
+	const granted = tokenScopes(accessToken);
 	if (granted.length > 0) {
-		const wanted = (conn.scopes.length > 0 ? conn.scopes : DEFAULT_SCOPES).filter(
-			(scope) => !["openid", "profile", "offline_access"].includes(scope),
-		);
+		const wanted = conn.scopes.length > 0 ? conn.scopes : DEFAULT_SCOPES;
 		const missing = wanted.filter(
 			(scope) => !granted.some((g) => g.toLowerCase() === scope.toLowerCase()),
 		);
@@ -84,15 +102,6 @@ async function checkConnection(
 				"  Sign in again after an admin grants consent, or remove the unused scopes from the account's `scopes`.",
 			);
 		}
-	}
-
-	if (offline) return lines;
-
-	try {
-		await getAccessToken(conn, signal);
-	} catch (err) {
-		lines.push(`- ❌ could not obtain a token: ${formatGraphError(err)}`);
-		return lines;
 	}
 
 	try {
@@ -146,8 +155,11 @@ export const teamsDoctorTool = {
 
 			const lines = ["## Teams doctor", ""];
 			lines.push(`- config: \`${getConfigPath()}\``);
-			lines.push(`- tokens: \`${getTokenPath()}\``);
+			lines.push(`- tokens: \`${getCacheDir()}/\``);
 			lines.push(`- audit log: \`${getAuditPath()}\``);
+			lines.push(
+				`- browser sign-in: ${canOpenBrowser() ? "available" : `unavailable — ${browserUnavailableReason()}`}`,
+			);
 			lines.push("");
 
 			if (errors.length > 0) {

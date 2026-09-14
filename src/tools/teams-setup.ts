@@ -27,6 +27,7 @@ interface SetupParams {
 	displayName?: string;
 	clientSecret?: string;
 	authMode?: string;
+	loopbackPort?: number;
 	safetyLevel?: string;
 	parentAccount?: string;
 	setDefault?: boolean;
@@ -116,7 +117,14 @@ export const teamsSetupTool = {
 		authMode: Type.Optional(
 			Type.String({
 				description:
-					"'device-code' (act as the signed-in user, default), 'client-credentials' (app-only, cannot post as a person), or 'auto'",
+					"'interactive' (browser sign-in, acts as the user — default), 'device-code' (same, but for machines with no browser), " +
+					"'client-credentials' (app-only, cannot post as a person), or 'auto' to decide per machine",
+			}),
+		),
+		loopbackPort: Type.Optional(
+			Type.Number({
+				description:
+					"Fixed port for the browser sign-in redirect. Only needed when the app registration lists an exact redirect URI such as http://localhost:3000.",
 			}),
 		),
 		safetyLevel: Type.Optional(
@@ -179,6 +187,7 @@ export const teamsSetupTool = {
 					clientSecret: params.clientSecret,
 					authMode: params.authMode as TenantConfig["authMode"],
 					scopes: params.scopes,
+					loopbackPort: params.loopbackPort,
 					safetyLevel,
 					permissions,
 				};
@@ -211,8 +220,9 @@ export const teamsSetupTool = {
 				tenantId: params.tenantId,
 				clientId: params.clientId,
 				clientSecret: params.clientSecret,
-				authMode: (params.authMode as AccountConfig["authMode"]) ?? "device-code",
+				authMode: (params.authMode as AccountConfig["authMode"]) ?? "interactive",
 				scopes: params.scopes,
+				loopbackPort: params.loopbackPort,
 				safetyLevel: safetyLevel ?? "confirm",
 				permissions,
 			};

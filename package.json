@@ -29,7 +29,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "typebox": "^1.2.8"
+    "@azure/msal-node": "^6.0.0",
+    "typebox": ">=1.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.70.0",

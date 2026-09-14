@@ -28,8 +28,8 @@ pi install /path/to/pi-teams
      clientId: <application (client) ID>
      setDefault: true
    ```
-3. **Sign in:** run `/teams-login`. pi shows a code and a URL; open it, enter
-   the code, sign in as yourself.
+3. **Sign in:** run `/teams-login`. Your browser opens at the Microsoft
+   sign-in page and closes itself when you are done — nothing to type.
 4. **Check it works:** `/teams-status`, then `/teams-inbox`.
 
 ---
@@ -76,41 +76,122 @@ Without this, sign-in fails with `AADSTS7000218`.
 | `Calendars.ReadWrite` | reading and creating calendar events |
 | `OnlineMeetings.ReadWrite` | Teams meeting links |
 | `Files.Read.All`, `Sites.Read.All` | channel files |
-| `offline_access` | staying signed in |
 
-Some of these require **admin consent**. Click *Grant admin consent* if you
-can, or ask an administrator. `teams_doctor` reports exactly which scopes were
-granted and which were not, so you never have to guess from a 403.
+`openid`, `profile` and `offline_access` are not listed: MSAL always requests
+them and rejects them in an explicit scope list, so the lasting sign-in they
+buy is automatic.
 
-To request fewer permissions, set `scopes` on the account — see below.
+### 4. Add the redirect URI for the browser sign-in
 
-### 4. Guest and customer tenants
+**Authentication** → **Add a platform** → **Mobile and desktop applications** →
+tick `http://localhost`.
+
+MSAL picks a free loopback port at sign-in time, and Entra accepts any port on
+localhost for a public client, so this one entry covers every run. If your
+tenant insists on an exact URI, register e.g. `http://localhost:3000` and set
+`loopbackPort: 3000` on the account.
+
+---
+
+## Who has to approve what
+
+Two separate hurdles, and only one of them normally needs an administrator.
+
+### Creating the registration
+
+By default any member of the tenant may register an application (Entra ID →
+**User settings** → *Users can register applications*). Where that is switched
+off, the least-privileged role that can do it is **Application Developer**;
+Cloud Application Administrator and Application Administrator also work.
+Changing *Allow public client flows* and adding the redirect URI need no extra
+role once the registration is yours.
+
+### Consenting to the permissions
+
+Only two of the default scopes require **admin consent**:
+
+| Scope | Consent | What you lose without it |
+|-------|---------|--------------------------|
+| `ChannelMessage.Read.All` | **admin** | reading channel messages and threads |
+| `ChannelMember.Read.All` | **admin** | channel member lists |
+| `ChannelMessage.Send` | user | — |
+| `Chat.ReadWrite`, `ChatMessage.Send` | user | — |
+| `Team.ReadBasic.All`, `Channel.ReadBasic.All` | user | — |
+| `User.Read`, `User.ReadBasic.All` | user | — |
+| `Presence.ReadWrite`, `Presence.Read.All` | user | — |
+| `Calendars.ReadWrite`, `OnlineMeetings.ReadWrite` | user | — |
+| `Files.Read.All`, `Sites.Read.All` | user | — |
+
+Posting in a channel needs no admin; *reading* the channel does. Microsoft
+treats bulk reading of channel content as the more sensitive right.
+
+**Without an administrator**, drop the two admin-consent scopes and everything
+else still works — chats in full, posting and replying in channels, presence,
+calendar, meetings and directory lookup:
+
+```json
+"scopes": [
+  "User.Read", "User.ReadBasic.All",
+  "Team.ReadBasic.All", "Channel.ReadBasic.All", "ChannelMessage.Send",
+  "Chat.ReadWrite", "ChatMessage.Send",
+  "Presence.ReadWrite", "Presence.Read.All",
+  "Calendars.ReadWrite", "OnlineMeetings.ReadWrite",
+  "Files.Read.All", "Sites.Read.All"
+]
+```
+
+One caveat: if the tenant has *Users can consent to applications* switched off,
+even the user-consentable scopes need an administrator — usually through the
+admin consent request workflow.
+
+`teams_doctor` reports exactly which scopes were actually granted, so a missing
+consent shows up as a named permission rather than a 403.
+
+### Guest and customer tenants
 
 For a tenant that is not your own:
 
 - the registration must be **multitenant**,
 - your account must be a guest in that tenant,
-- an administrator there consents to the app once.
+- an administrator **of that tenant** consents to the app once.
 
-Then add it as a tenant beneath your account (`parentAccount`) and sign in
-again against it.
+In practice this is the bigger hurdle, not your own tenant. Once it is done,
+add the tenant beneath your account (`parentAccount` in `teams_setup`) and sign
+in against it.
 
 ---
 
-## Acting as a user vs. app-only
+## How the sign-in works
 
-| | `device-code` (default) | `client-credentials` |
-|---|---|---|
-| Identity | you | the application |
-| Sign-in | once, interactive | none |
-| Reading chats/channels | yes | only via protected APIs |
-| **Sending messages** | **yes** | **no** — refused with an explanation |
-| Presence, calendar | yes | partially |
+`teams_login` uses MSAL (`@azure/msal-node`) and picks the flow that fits the
+machine:
+
+| | `interactive` (default) | `device-code` | `client-credentials` |
+|---|---|---|---|
+| What you do | browser opens, you sign in | type a short code elsewhere | nothing |
+| Identity | you | you | the application |
+| Needs a browser | yes | no | no |
+| Reading chats/channels | yes | yes | only via protected APIs |
+| **Sending messages** | **yes** | **yes** | **no** — refused with an explanation |
+| Presence, calendar | yes | yes | partially |
+
+**Interactive** is chosen automatically wherever a browser can actually be
+reached. MSAL opens the system browser, listens on a loopback port for the
+redirect, and handles PKCE — nothing to copy or type.
+
+**Device code** takes over automatically over SSH, in containers, and on any
+machine without a display server, because a browser opened there would appear
+where nobody is looking. Force it anywhere with `PI_TEAMS_NO_BROWSER=1`, per
+account with `"authMode": "device-code"`, or per call with
+`teams_login mode: device-code`.
+
+Either way the session is cached on disk and renewed silently, so signing in is
+a once-per-account affair.
 
 Microsoft Graph only permits app-only writes to chats and channels for
 migration scenarios (`Teamwork.Migrate.All`), so pi-teams refuses those calls
 up front instead of letting them fail deep inside a Graph request. Use
-`client-credentials` for unattended read-only jobs, `device-code` for
+`client-credentials` for unattended read-only jobs, and a delegated flow for
 everything that speaks in your name.
 
 ---
@@ -129,7 +210,7 @@ prefer.
       "displayName": "NeoImpulse",
       "tenantId": "neoimpulse.onmicrosoft.com",
       "clientId": "00000000-0000-0000-0000-000000000000",
-      "authMode": "device-code",
+      "authMode": "interactive",
       "safetyLevel": "confirm",
       "permissions": {
         "read": {
@@ -250,7 +331,7 @@ teams_permissions:
 | Tool | Description |
 |------|-------------|
 | `teams_setup` | Write an account or tenant to the config file |
-| `teams_login` | Sign in as yourself (device code flow) |
+| `teams_login` | Sign in as yourself (browser, or device code where there is none) |
 | `teams_logout` | Remove a saved session |
 | `teams_accounts` | List accounts, switch the default, change a safety level, delete |
 | `teams_status` | Which account is active, who pi acts as, what it may do |
@@ -298,7 +379,7 @@ teams_permissions:
 | Command | Description |
 |---------|-------------|
 | `/teams-status` | Show the connection and permissions |
-| `/teams-login` | Start the device code sign-in |
+| `/teams-login` | Sign in to Teams as yourself |
 | `/teams-inbox` | What needs your attention right now |
 | `/teams-permissions` | What pi may and may not do |
 | `/teams-doctor` | Diagnose the setup |
@@ -354,7 +435,7 @@ teams_send_channel_message:
 | File | Contents | Mode |
 |------|----------|------|
 | `~/.pi/agent/pi-teams.json` | accounts, tenants, safety levels, scope rules | `0600` |
-| `~/.pi/agent/pi-teams-tokens.json` | access and refresh tokens per account+tenant | `0600` |
+| `~/.pi/agent/pi-teams-tokens/` | one MSAL token cache per account+tenant | `0600` |
 | `~/.pi/agent/pi-teams-audit.jsonl` | one line per write: when, who, where, what | `0600` |
 
 Both the config and the token cache are written through a private temp file and
@@ -371,7 +452,7 @@ middle.
 - **`src/config/index.ts`** — accounts, tenants, the safety cascade, persistence.
 - **`src/config/scope.ts`** — allow/deny matching. Pure, and the most heavily
   tested module in the package.
-- **`src/auth/`** — device code flow, client credentials, token cache, JWT claims.
+- **`src/auth/`** — MSAL applications, the file-backed token cache, JWT claims.
 - **`src/graph/client.ts`** — fetch wrapper: bearer token, paging, throttling.
 - **`src/graph/*.ts`** — one module per resource area, returning domain types.
 - **`src/graph/mappers.ts`** — Graph JSON → domain types. Pure.
@@ -398,11 +479,14 @@ a network connection.
 |---------|---------------|
 | `AADSTS7000218` | "Allow public client flows" is off in the app registration |
 | `AADSTS65001` | Consent missing — sign in again, or have an admin consent |
+| `AADSTS50011` (redirect URI mismatch) | Add `http://localhost` under *Mobile and desktop applications*, or pin `loopbackPort` |
 | `AADSTS50020` | The account is not a member/guest of that tenant, or the app is single-tenant |
-| "Not signed in" | Run `teams_login`; the refresh token may have been revoked |
+| Browser never opens | No browser is reachable here; `teams_doctor` says why. `teams_login mode: device-code` always works |
+| Browser opens, page never returns | A firewall is blocking the loopback port. Pin `loopbackPort` and allow it, or use the device code flow |
+| "Not signed in" | Run `teams_login`; the saved session may have been revoked |
 | "Blocked by configuration" | Your own scope rules. `teams_permissions action: test` shows which rule |
-| "cannot run on an app-only token" | Set `authMode: "device-code"` and run `teams_login` |
-| 403 on channel messages | `ChannelMessage.Read.All` / `ChannelMessage.Send` not consented |
+| "cannot run on an app-only token" | Set `authMode: "interactive"` and run `teams_login` |
+| 403 reading channel messages | `ChannelMessage.Read.All` needs **admin** consent — see "Who has to approve what" |
 | Throttled | Graph rate limit; the client retries with back-off, then reports it |
 
 Run `teams_doctor` first — it checks all of the above at once.

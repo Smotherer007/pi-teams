@@ -31,6 +31,8 @@ const {
 	ConfigError,
 } = await import("../src/config/index.ts");
 
+const { canOpenBrowser } = await import("../src/utils/environment.ts");
+
 const baseAccount = {
 	name: "work",
 	tenantId: "contoso.onmicrosoft.com",
@@ -60,19 +62,31 @@ describe("safety cascade", () => {
 
 describe("auth mode", () => {
 	test("auto picks client-credentials only when a secret exists", () => {
-		assert.equal(resolveAuthMode(baseAccount, undefined, false), "device-code");
-		assert.equal(resolveAuthMode(baseAccount, undefined, true), "client-credentials");
+		assert.equal(resolveAuthMode(baseAccount, undefined, true, true), "client-credentials");
+		assert.equal(resolveAuthMode(baseAccount, undefined, false, true), "interactive");
 	});
 
-	test("an explicit mode is respected", () => {
+	test("auto falls back to device code where no browser can be reached", () => {
+		assert.equal(resolveAuthMode(baseAccount, undefined, false, false), "device-code");
+	});
+
+	test("a secret wins over the browser check", () => {
+		// An app-only account has no user to put in front of a browser.
+		assert.equal(resolveAuthMode(baseAccount, undefined, true, false), "client-credentials");
+	});
+
+	test("an explicit mode is respected, browser or not", () => {
 		const account = { ...baseAccount, authMode: "device-code" as const };
-		assert.equal(resolveAuthMode(account, undefined, true), "device-code");
+		assert.equal(resolveAuthMode(account, undefined, true, true), "device-code");
+
+		const interactive = { ...baseAccount, authMode: "interactive" as const };
+		assert.equal(resolveAuthMode(interactive, undefined, false, false), "interactive");
 	});
 
 	test("a tenant may override the account's mode", () => {
-		const account = { ...baseAccount, authMode: "device-code" as const };
+		const account = { ...baseAccount, authMode: "interactive" as const };
 		const tenant = { name: "t", tenantId: "t", authMode: "client-credentials" as const };
-		assert.equal(resolveAuthMode(account, tenant, true), "client-credentials");
+		assert.equal(resolveAuthMode(account, tenant, true, true), "client-credentials");
 	});
 });
 
@@ -129,7 +143,9 @@ describe("resolveConnection", () => {
 		assert.equal(conn.account, "work");
 		assert.equal(conn.tenant, "work");
 		assert.equal(conn.safetyLevel, "open");
-		assert.equal(conn.authMode, "device-code");
+		// The default auth mode follows the environment: a browser where one is
+		// reachable, the device code flow where it is not (SSH, no display).
+		assert.equal(conn.authMode, canOpenBrowser() ? "interactive" : "device-code");
 		assert.ok(conn.scopes.includes("ChannelMessage.Send"));
 		assert.deepEqual(conn.permissions.write.channels.deny, ["HR/*"]);
 	});

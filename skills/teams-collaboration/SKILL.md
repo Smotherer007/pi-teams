@@ -12,8 +12,10 @@ something the user is personally saying.
 ## Before anything else
 
 Run `teams_status` if you are unsure which account is active or whether pi is
-signed in. If it reports "not signed in", run `teams_login` — it prints a short
-code and a URL that the user must open themselves.
+signed in. If it reports "not signed in", run `teams_login`: it opens the
+user's browser and completes on its own. On a machine with no browser it falls
+back to a device code — then show the code and the URL to the user verbatim,
+because they cannot finish signing in without them.
 
 If a tool fails with an authentication, permission or configuration error, run
 `teams_doctor` and report what it says. Do not retry the failing call.

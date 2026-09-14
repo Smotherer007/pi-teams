@@ -4,7 +4,7 @@
 
 import { Type } from "typebox";
 import { buildConnectionCard, formatStatusText } from "../status.ts";
-import { getToken, isFresh } from "../auth/token-store.ts";
+import { readCacheSummary } from "../auth/cache-plugin.ts";
 import { readRootConfig } from "../config/index.ts";
 import {
 	AccountParam,
@@ -47,13 +47,13 @@ export const teamsStatusTool = {
 					...(account.tenants ?? []).map((t) => ({ name: `${account.name}/${t.name}`, tenantId: t.tenantId })),
 				];
 				for (const entry of tenants) {
-					const token = getToken(account.name, entry.tenantId);
-					const state = isFresh(token)
-						? "signed in"
-						: token?.refreshToken
-							? "session saved (will refresh)"
-							: "not signed in";
-					const who = token?.user?.upn ? ` — ${token.user.upn}` : "";
+					const cache = readCacheSummary(account.name, entry.tenantId);
+					const state = !cache.present
+						? "not signed in"
+						: cache.fresh
+							? "signed in"
+							: "session saved (renews on next use)";
+					const who = cache.username ? ` — ${cache.username}` : "";
 					others.push(`- ${entry.name}: ${state}${who}`);
 				}
 			}

@@ -41,14 +41,19 @@ describe("blockReason", () => {
 	});
 
 	test("confirm and open let mutations through to the confirmation step", () => {
-		assert.equal(blockReason("confirm", "device-code", "teams_send_chat_message"), undefined);
+		assert.equal(blockReason("confirm", "interactive", "teams_send_chat_message"), undefined);
 		assert.equal(blockReason("open", "device-code", "teams_send_chat_message"), undefined);
+	});
+
+	test("both delegated flows may write — only app-only is special", () => {
+		assert.equal(blockReason("open", "interactive", "teams_send_channel_message"), undefined);
+		assert.equal(blockReason("open", "device-code", "teams_send_channel_message"), undefined);
 	});
 
 	test("app-only tokens cannot post as a person", () => {
 		const reason = blockReason("open", "client-credentials", "teams_send_channel_message");
 		assert.match(reason ?? "", /app-only/);
-		assert.match(reason ?? "", /device-code/);
+		assert.match(reason ?? "", /interactive/);
 	});
 
 	test("app-only may still manage the calendar", () => {
