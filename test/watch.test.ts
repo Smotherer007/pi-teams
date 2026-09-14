@@ -18,6 +18,7 @@ import {
 	isWatchedSender,
 	mentionsMe,
 	noteWake,
+	openMessages,
 	pruneState,
 	shouldWake,
 	wakesThisHour,
@@ -271,6 +272,44 @@ describe("state bookkeeping", () => {
 	});
 });
 
+describe("openMessages", () => {
+	const earlier = message({ id: "msg-1", text: "ich brauche Urlaub", createdDateTime: new Date(NOW - 300_000).toISOString() });
+	const middle = message({ id: "msg-2", text: "bzw ich mach drei kreuze", createdDateTime: new Date(NOW - 240_000).toISOString() });
+	const newest = message({ id: "msg-3", text: "hilft dir das?", createdDateTime: new Date(NOW - 60_000).toISOString() });
+
+	test("returns everything the read cursor has not caught up with, oldest first", () => {
+		const readAt = new Date(NOW - 600_000).toISOString();
+		assert.deepEqual(
+			openMessages([newest, middle, earlier], readAt, ME).map((msg) => msg.id),
+			["msg-1", "msg-2", "msg-3"],
+		);
+	});
+
+	test("drops what the user already read", () => {
+		const readAt = new Date(NOW - 270_000).toISOString();
+		assert.deepEqual(
+			openMessages([newest, middle, earlier], readAt, ME).map((msg) => msg.id),
+			["msg-2", "msg-3"],
+		);
+	});
+
+	test("never treats my own messages as open questions", () => {
+		const mine = message({ id: "msg-4", from: { id: "me-1", displayName: "Patrick Weppelmann" } });
+		const open = openMessages([mine, newest], new Date(NOW - 600_000).toISOString(), ME);
+		assert.deepEqual(open.map((msg) => msg.id), ["msg-3"]);
+	});
+
+	test("skips deleted messages", () => {
+		const gone = message({ id: "msg-5", deletedDateTime: new Date(NOW - 30_000).toISOString() });
+		const open = openMessages([gone, newest], undefined, ME);
+		assert.deepEqual(open.map((msg) => msg.id), ["msg-3"]);
+	});
+
+	test("treats a read cursor Graph will not give as everything being open", () => {
+		assert.equal(openMessages([newest, middle, earlier], undefined, ME).length, 3);
+	});
+});
+
 describe("composeWatchPrompt", () => {
 	test("carries the chat ID, the sender and the instruction to use it", () => {
 		const event = { chat: chat(), message: message(), wokeAt: NOW, me: ME };
@@ -292,5 +331,35 @@ describe("composeWatchPrompt", () => {
 	test("says something useful when the message has no text", () => {
 		const event = { chat: chat(), message: message({ text: "" }), wokeAt: NOW, me: ME };
 		assert.match(composeWatchPrompt(event, ME), /no text content/);
+	});
+
+	test("shows the whole open thread and asks for all of it, not only the newest", () => {
+		const earlier = message({ id: "msg-1", text: "ich brauche Urlaub" });
+		const middle = message({ id: "msg-2", text: "bzw ich mach drei kreuze" });
+		const newest = message({ id: "msg-3", text: "hilft dir das?" });
+		const event = {
+			chat: chat(),
+			message: newest,
+			backlog: [earlier, middle, newest],
+			wokeAt: NOW,
+			me: ME,
+		};
+		const prompt = composeWatchPrompt(event, ME);
+
+		assert.match(prompt, /> 1\. .*\n> ich brauche Urlaub/);
+		assert.match(prompt, /> 2\. /);
+		assert.match(prompt, /> bzw ich mach drei kreuze/);
+		assert.match(prompt, /newest/);
+		assert.match(prompt, /Answer every one of them, not just the newest/);
+		assert.match(prompt, /Unanswered messages in this chat \(3\), oldest first:/);
+	});
+
+	test("keeps the single-message shape when nothing older is open", () => {
+		const event = { chat: chat(), message: message(), backlog: [message()], wokeAt: NOW, me: ME };
+		const prompt = composeWatchPrompt(event, ME);
+
+		assert.match(prompt, /^Message:$/m);
+		assert.match(prompt, /Decide whether this needs an answer\./);
+		assert.doesNotMatch(prompt, /Answer every one of them/);
 	});
 });

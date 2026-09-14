@@ -193,6 +193,54 @@ export function isWatchedSender(message: MessageSummary, watch: ResolvedWatchCon
 }
 
 // ---------------------------------------------------------------------------
+// What the answer has to cover
+// ---------------------------------------------------------------------------
+
+/**
+ * How many recent messages of a chat the watcher pulls in.
+ *
+ * One would be enough to decide *whether* to wake, and that is what this used to
+ * be — but not enough to answer well: someone who sends three lines in a row
+ * leaves three open messages, and a reply to only the newest reads as if the
+ * other two were ignored. The window is small on purpose; it only exists to
+ * carry the context of the newest message, not to replay the conversation.
+ */
+export const WATCH_MESSAGE_WINDOW = 10;
+
+/**
+ * The messages in this chat that are still open for the user, oldest first.
+ *
+ * "Open" is the Teams read cursor talking, exactly as `isUnread` means it: a
+ * message from somebody else that the user has not caught up with yet. Messages
+ * of my own are dropped — pi posts as the user, so they are the answers that
+ * were already given, not questions waiting for one.
+ *
+ * `messages` is newest first, as Graph returns it. A `readAt` Teams will not
+ * give is treated as "all of them are open" rather than as settled, for the same
+ * reason `isUnread` does: a read state we cannot read must not silently switch
+ * listen mode off.
+ */
+export function openMessages(
+	messages: MessageSummary[],
+	readAt: string | undefined,
+	me: SignedInUser | undefined,
+): MessageSummary[] {
+	const read = readAt ? new Date(readAt).getTime() : Number.NaN;
+	const known = Number.isFinite(read);
+
+	return messages
+		.filter((entry) => {
+			if (entry.deletedDateTime) return false;
+			if (isFromMe(entry.from, me)) return false;
+			if (!known) return true;
+
+			const at = entry.createdDateTime ? new Date(entry.createdDateTime).getTime() : Number.NaN;
+			return Number.isFinite(at) && at > read;
+		})
+		.reverse();
+}
+
+// ---------------------------------------------------------------------------
 // Whether a message should wake pi
 // ---------------------------------------------------------------------------
 

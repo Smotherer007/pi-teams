@@ -33,9 +33,11 @@ import {
 	noteFailure,
 	noteSuccess,
 	noteWake,
+	openMessages,
 	pruneState,
 	shouldWake,
 	wakesThisHour,
+	WATCH_MESSAGE_WINDOW,
 	type WatchState,
 } from "./index.ts";
 
@@ -46,7 +48,17 @@ import {
 /** One message that deserves a model turn. */
 export interface WatchEvent {
 	chat: ChatSummary;
+	/** The newest message in the chat — the one the wake was decided on */
 	message: MessageSummary;
+	/**
+	 * Everything still open in that chat, oldest first, the newest included.
+	 *
+	 * Waking up is about one message, answering is usually about more than one:
+	 * three lines sent in a row are three open messages, and answering only the
+	 * last of them is what the user notices. Empty means the trigger was the only
+	 * thing the read cursor left open.
+	 */
+	backlog?: MessageSummary[];
 	/** Epoch ms the wake was decided */
 	wokeAt: number;
 	/** Who pi is acting as, carried along for the prompt */
@@ -88,7 +100,11 @@ export const MAX_EXAMINATIONS_PER_TICK = 5;
 export interface WatchTickDeps {
 	/** Newest chats, most recent activity first */
 	listChats: () => Promise<ChatSummary[]>;
-	/** The most recent messages of one chat, newest first */
+	/**
+	 * A window of the chat's most recent messages, newest first — enough to find
+	 * the newest one and whatever the user has not read yet (see
+	 * `WATCH_MESSAGE_WINDOW`).
+	 */
 	listMessages: (chatId: string) => Promise<MessageSummary[]>;
 	/**
 	 * The user's read cursor for one chat (`viewpoint.lastMessageReadDateTime`).
@@ -186,7 +202,18 @@ export async function runWatchTick(
 		if (!decision.wake) continue;
 
 		noteWake(state, chat.id, now);
-		wakes.push({ chat, message, wokeAt: now, me });
+
+		// The answer has to cover the whole open thread, not just its newest line:
+		// the trigger message is the reason for the wake, the backlog is the reason
+		// for a reply that sounds like the conversation was read.
+		const backlog = openMessages(messages, readAt, me);
+		wakes.push({
+			chat,
+			message,
+			backlog: backlog.length > 0 ? backlog : [message],
+			wokeAt: now,
+			me,
+		});
 	}
 
 	// Written even when nothing woke: marking a chat examined is the progress
@@ -295,7 +322,8 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 			const result = await runWatchTick(
 				{
 					listChats: () => listChats(connection, { max: 50, meId: me?.id }),
-					listMessages: (chatId) => listChatMessages(connection, chatId, { max: 1 }),
+					listMessages: (chatId) =>
+						listChatMessages(connection, chatId, { max: WATCH_MESSAGE_WINDOW }),
 					readState: async (chatId) => (await getChatViewpoint(connection, chatId))?.lastMessageReadAt,
 					now: () => Date.now(),
 					allowed: (chat) => hasAccess(connection, "read", "chats", chatCandidates(chat)),
