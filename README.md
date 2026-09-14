@@ -358,8 +358,8 @@ your own company can be `confirm` while a customer tenant stays `readonly`.
 
 ### AI disclosure footer
 
-Off by default. Switched on, every message, reply and edit pi sends in your name
-ends with a short note saying it was written by an AI:
+On by default. Every message, reply and edit pi sends in your name ends with a
+short note saying it was written by an AI:
 
 ```json
 "aiFooter": { "enabled": true, "text": "🤖 Erstellt mit pi (KI-Assistent)" }
@@ -367,11 +367,13 @@ ends with a short note saying it was written by an AI:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `enabled` | `false` | append the note to everything pi sends |
+| `enabled` | `true` | append the note to everything pi sends |
 | `text` | `🤖 Generated with pi (an AI agent)` | the wording; empty means the default |
 
-Set it globally or per account (the account level wins field by field, so one
-account can use its own wording while another keeps the global one).
+Turn it off with `"enabled": false` if the disclosure does not fit the people
+you write to. Set it globally or per account (the account level wins field by
+field, so one account can use its own wording while another keeps the global
+one).
 
 Details worth knowing:
 
@@ -427,7 +429,7 @@ teams_permissions:
 | `maxMessages` | `25` | default page size for message listings |
 | `audit` | `true` | append every write to `~/.pi/agent/pi-teams-audit.jsonl` |
 | `scopes` | see above | override the requested Graph scopes per account/tenant |
-| `aiFooter` | off | append an AI disclosure to every message pi sends — see above |
+| `aiFooter` | on | append an AI disclosure to every message pi sends — see above |
 | `graphBaseUrl` / `authorityHost` | Microsoft public cloud | sovereign cloud endpoints |
 
 ---

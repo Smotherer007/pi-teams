@@ -69,7 +69,7 @@ export const teamsSendChatMessageTool = {
 	promptGuidelines: [
 		"Write the message in the user's voice — it is sent from their account, not from an assistant.",
 		"Show the user the exact text before sending when the intent is even slightly ambiguous.",
-		"Do not add signatures, disclaimers, or a note that the message was written by an AI unless the user asks.",
+		"Do not add signatures, or a note that the message was written by an AI: the sending tool appends the configured AI disclosure itself (on by default), so writing one into the body duplicates it.",
 		"Format for a chat, not for a document: lead with the answer, three short paragraphs at most, bullets for lists. Bold, italics, code, links and bullets are rendered; headings become bold lines and tables are not supported — keep those out.",
 		"Answer in the language of the conversation you are writing into, and match its register.",
 	],

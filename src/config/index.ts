@@ -137,13 +137,14 @@ export interface ResolvedWatchConfig {
 /**
  * The note pi can append to everything it sends in the user's name.
  *
- * Off by default, and deliberately so: pi writes as the user, and a disclosure
- * a recipient did not expect is a statement the user did not make. Where an
- * organisation wants it — a works council, a customer, a regulated process —
- * switching it on is a one-line change.
+ * On by default, and deliberately so: pi writes as the user, and a recipient
+ * who reads a message as coming from a colleague should be able to tell that a
+ * model composed it. A disclosure that depends on remembering to switch it on
+ * is not a disclosure, so the safe state is the default one — an organisation
+ * that does not want it turns it off with `enabled: false`.
  */
 export interface AiFooterConfig {
-	/** Append the note to every outgoing message (default: false) */
+	/** Append the note to every outgoing message (default: true) */
 	enabled?: boolean;
 	/** The note itself (default: see AI_FOOTER_DEFAULT) */
 	text?: string;
@@ -294,7 +295,7 @@ const DEFAULTS = {
 	authMode: "auto" as AuthMode,
 	maxMessages: 25,
 	audit: true,
-	aiFooter: false,
+	aiFooter: true,
 	graphBaseUrl: "https://graph.microsoft.com/v1.0",
 	authorityHost: "https://login.microsoftonline.com",
 };
@@ -901,7 +902,7 @@ const TEMPLATE_JSON = `{
   "safetyLevel": "confirm",
   "maxMessages": 25,
   "audit": true,
-  "aiFooter": { "enabled": false, "text": "🤖 Generated with pi (an AI agent)" }
+  "aiFooter": { "enabled": true, "text": "🤖 Generated with pi (an AI agent)" }
 }
 `;
 

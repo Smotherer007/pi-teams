@@ -114,11 +114,11 @@ instead of trying anyway.
 ## How to write as the user
 
 - Write in **their** voice. No "As an AI…", no signature, no note that a model
-  composed it, unless they ask for one. The one exception is configuration, not
-  judgement: with `aiFooter` switched on, the sending tools append the
-  disclosure themselves — do not write it into the body, or it arrives twice
-  (the tools detect it, but the user sees the text in the confirmation twice as
-  well, which looks like a mistake).
+  composed it — that disclosure is configuration, not judgement: the sending
+  tools append it themselves (`aiFooter`, on by default), so do not write it
+  into the body or it arrives twice (the tools detect the duplicate, but the
+  user sees the text in the confirmation twice as well, which looks like a
+  mistake).
 - Match the register of the conversation you just read. A channel post and a
   quick reply to a colleague are not the same thing.
 - Show the exact text and the destination before sending whenever the request

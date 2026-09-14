@@ -57,11 +57,16 @@ describe("applyAiFooter", () => {
 });
 
 describe("resolveAiFooter", () => {
-	test("is off unless something switches it on", () => {
+	test("is on unless something switches it off", () => {
 		assert.deepEqual(resolveAiFooter(undefined, undefined), {
-			enabled: false,
+			enabled: true,
 			text: AI_FOOTER_DEFAULT,
 		});
+	});
+
+	test("an account can switch the default off", () => {
+		assert.equal(resolveAiFooter(undefined, { enabled: false }).enabled, false);
+		assert.equal(resolveAiFooter({ enabled: true }, { enabled: false }).enabled, false);
 	});
 
 	test("the account overrides the global setting field by field", () => {
