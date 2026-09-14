@@ -5,10 +5,19 @@
  * from the user typing it. Hence the order of operations — resolve the chat,
  * check the chat rules, check every participant against the people rules,
  * resolve the mentions, send, then record the audit entry.
+ *
+ * The last step is the read cursor. Sending from Graph does not move it — only
+ * the user opening the chat, or teams_mark_read, does — so without this a chat
+ * pi has just answered keeps its unread marker in Teams, which is the one thing
+ * that looks like nobody dealt with it. Replying is reading, so the message
+ * would arrive with the chat still bold; the mark is best effort and comes last,
+ * because a send that went out must not be reported as failed.
  */
 
 import { Type } from "typebox";
+import { setChatReadState } from "../graph/chats.ts";
 import { sendChatMessage } from "../graph/messages.ts";
+import { formatGraphError } from "../utils/errors.ts";
 import { resolveUserId } from "../graph/me.ts";
 import { auditWrite } from "../safety/audit.ts";
 import { assertAccess } from "../safety/index.ts";
@@ -135,6 +144,18 @@ export const teamsSendChatMessageTool = {
 					summary: truncate(body, 200),
 				});
 
+				// Replying is reading: clear the unread marker the answer was written for.
+				// Deliberately after the audit entry, so the message that went out is
+				// recorded even when the read-mark cannot be moved.
+				let readNote = "";
+				if (me) {
+					try {
+						await setChatReadState(conn, chat.id, me, true, { signal });
+					} catch (err) {
+						readNote = `\n\n⚠️ The chat could not be marked as read: ${formatGraphError(err)}`;
+					}
+				}
+
 				return textResult(
 					[
 						`✅ Message sent to **${chat.label}** as ${me?.displayName ?? "you"} (${connectionLabel(conn)}).`,
@@ -142,7 +163,7 @@ export const teamsSendChatMessageTool = {
 						`> ${truncate(body, 300)}`,
 						"",
 						`messageId: ${sent.id}`,
-					].join("\n"),
+					].join("\n") + readNote,
 					{ chatId: chat.id, messageId: sent.id },
 				);
 			} catch (err) {
