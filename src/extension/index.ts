@@ -143,12 +143,23 @@ export default function (pi: ExtensionAPI) {
 	/** The watcher running in this session, when listen mode is on. */
 	let watchLoop: WatchLoop | undefined;
 
+	/**
+	 * The settings the running watcher was started from.
+	 *
+	 * Used to tell a real config change from a tool that merely *read* the
+	 * settings. Restarting resets the watcher's baseline, which discards every
+	 * chat it has already looked at and swallows whatever arrived just before —
+	 * so a `teams_watch status` must not be treated like an edit.
+	 */
+	let watchSignature: string | undefined;
+
 	/** The last polling error the user was told about, so it is said once. */
 	let reportedWatchError: string | undefined;
 
 	const stopWatch = () => {
 		watchLoop?.stop();
 		watchLoop = undefined;
+		watchSignature = undefined;
 		setActiveWatchLoop(undefined);
 	};
 
@@ -159,9 +170,15 @@ export default function (pi: ExtensionAPI) {
 	 * change cannot leave two pollers running.
 	 */
 	const startWatch = (ctx: any) => {
+		const conn = refresh();
+
+		// Already watching this exact configuration: leave the loop alone, so its
+		// baseline and its cooldowns survive a look at the status.
+		const signature = conn?.watch.enabled ? JSON.stringify(conn.watch) : undefined;
+		if (watchSignature !== undefined && signature === watchSignature && watchLoop) return;
+
 		stopWatch();
 
-		const conn = refresh();
 		if (!conn?.watch.enabled) return;
 
 		reportedWatchError = undefined;
@@ -182,6 +199,7 @@ export default function (pi: ExtensionAPI) {
 		});
 
 		watchLoop = loop;
+		watchSignature = signature;
 		setActiveWatchLoop(loop);
 	};
 
