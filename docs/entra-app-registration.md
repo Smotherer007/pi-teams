@@ -267,7 +267,8 @@ that tenant on its own.
 | `AADSTS50020` — *not a member of the tenant* | wrong tenant, no guest account, or the app is single-tenant | steps 1 and 7 |
 | `AADSTS700016` — *application not found in directory* | wrong tenant ID or client ID | recheck `<DIRECTORY_TENANT_ID>` and `<APPLICATION_CLIENT_ID>` |
 | signed out after about an hour | the tenant grants no `offline_access` | the app needs a refresh token to renew silently; without it, run `teams_login` when the session expires. `teams_doctor` names the missing scope |
-| browser never opens from WSL | older versions called `xdg-open`, which a plain WSL distro does not have — and the failure was swallowed | update pi-teams: current versions hand the URL to Windows PowerShell. If `/mnt/c` is not mounted, set `PI_TEAMS_NO_BROWSER=1` and use the device code flow — see `AADSTS53003` if Conditional Access blocks that |
+| browser never opens from WSL | older versions called `xdg-open`, which a plain WSL distro does not have — and the failure was swallowed | update pi-teams: current versions hand the URL to Windows PowerShell. If the Windows drive is not mounted where the handoff expects it, set `PI_TEAMS_BROWSER` to your own command |
+| browser opens, no callback, five-minute timeout | three unrelated causes look identical from inside pi | read what the browser showed: a consent still pending (`AADSTS65004`), Conditional Access (`AADSTS53003`), or a redirect URI that does not match the port (`AADSTS50011`). The timeout text says the same. An exit code of 0 proves nothing — a launcher can exit 0 without having opened anything |
 
 Run `teams_doctor` first for anything in this table: it validates the
 configuration, the cached session, the granted scopes and the connection to

@@ -267,6 +267,14 @@ account with `"authMode": "device-code"`, or per call with
 Either way the session is cached on disk and renewed silently, so signing in is
 a once-per-account affair.
 
+In **WSL** the URL is handed to Windows PowerShell, so the browser on the
+Windows side opens: no X server, no `DISPLAY`, and the authorize URL survives
+whole — including its `&`, which a `cmd.exe` handoff would cut at the first one.
+If the built-in launchers do not fit the machine, set `PI_TEAMS_BROWSER` to a
+command line that opens a URL: `{}` is replaced by the URL, otherwise the URL is
+appended. Every failure carries the URL in its message, so it can be pasted
+into a browser by hand — the one route that needs nothing installed.
+
 Microsoft Graph only permits app-only writes to chats and channels for
 migration scenarios (`Teamwork.Migrate.All`), so pi-teams refuses those calls
 up front instead of letting them fail deep inside a Graph request. Use
@@ -467,6 +475,7 @@ teams_permissions:
 | `teams_list_members` | Members of a team or channel |
 | `teams_find_user` | Directory lookup by name, e-mail or UPN |
 | `teams_list_files` | Files in a channel's SharePoint folder |
+| `teams_download_files` | Download the images and files of messages to a local directory |
 | `teams_get_presence` | Your status, a colleague's, or a whole chat's |
 | `teams_availability` | When several people are all free, from calendar free/busy |
 | `teams_list_meetings` | Calendar events and meetings in a range |
@@ -590,6 +599,7 @@ teams_send_channel_message:
 | `~/.pi/agent/pi-teams-tokens/` | one MSAL token cache per account+tenant | `0600` |
 | `~/.pi/agent/pi-teams-audit.jsonl` | one line per write: when, who, where, what | `0600` |
 | `~/.pi/agent/pi-teams-watch/` | listen mode's cursor: the newest message it has looked at per chat | `0600` |
+| `~/.pi/agent/pi-teams-files/` | images and files downloaded from messages, one folder per chat or channel | — |
 
 Both the config and the token cache are written through a private temp file and
 an atomic rename, so an interrupted write cannot truncate them. The watch
@@ -648,8 +658,9 @@ network connection.
 | `AADSTS50011` (redirect URI mismatch) | Add `http://localhost` under *Mobile and desktop applications*, or pin `loopbackPort` |
 | `AADSTS50020` | The account is not a member/guest of that tenant, or the app is single-tenant |
 | Signed out after about an hour | The tenant grants no `offline_access`, so there is no refresh token. `teams_doctor` names the missing scope; otherwise sign in again when it expires |
-| Browser never opens | No browser is reachable here; `teams_doctor` says why. `teams_login mode: device-code` always works |
-| Browser opens, page never returns | A firewall is blocking the loopback port. Pin `loopbackPort` and allow it, or use the device code flow |
+| Browser never opens | The launcher failed: the error names it, and carries the URL to open by hand. `teams_doctor` says whether a browser counts as reachable here, and `PI_TEAMS_BROWSER` points pi at your own command |
+| Browser opens, page never returns | Read what the browser showed before suspecting a firewall: a pending admin consent (`AADSTS65004`), a Conditional Access policy (`AADSTS53003`), or a redirect URI that does not match the port (`AADSTS50011`). The timeout message names all three. A blocked loopback port is the fourth possibility — pin `loopbackPort` and allow it |
+| A screenshot in a message is missing from the output | The text of a message cannot carry a picture. `teams_read_chat` says how many images a message has; `teams_download_files` fetches them so they can be opened |
 | "Not signed in" | Run `teams_login`; the saved session may have been revoked |
 | Status line says "not signed in" although sign-in worked | The line is written at session start and after every auth tool; if it lags, `/teams-status` repaints it |
 | "Blocked by configuration" | Your own scope rules. `teams_permissions action: test` shows which rule |
