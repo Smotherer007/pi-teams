@@ -298,6 +298,12 @@ export function formatMessage(message: MessageSummary, options: { showId?: boole
 	if (message.attachments.length > 0) {
 		meta.push(`attachments: ${message.attachments.map((a) => a.name ?? "file").join(", ")}`);
 	}
+	if (message.imageUrls.length > 0) {
+		// The images themselves are not in the text. Saying how many there are is
+		// what tells a reader that something is missing and where to get it.
+		const count = message.imageUrls.length;
+		meta.push(`${count} image${count === 1 ? "" : "s"} — use teams_download_files`);
+	}
 	if (message.replyCount !== undefined && message.replyCount > 0) {
 		meta.push(`${message.replyCount} repl${message.replyCount === 1 ? "y" : "ies"}`);
 	}
@@ -402,5 +408,42 @@ export function formatFileList(items: readonly DriveItemSummary[], title: string
 		lines.push(`- ${icon} **${item.name}**${size}${modified}`);
 		if (item.webUrl) lines.push(`  ${item.webUrl}`);
 	}
+	return lines.join("\n");
+}
+
+/**
+ * The result of saving a message's files.
+ *
+ * Typed structurally on purpose: this module is a leaf and knows nothing about
+ * Graph, so the caller passes the shape it already has.
+ */
+export function formatDownloadResult(
+	label: string,
+	dir: string,
+	saved: readonly { path: string; name: string; bytes: number; kind: string }[],
+	skipped: readonly { name: string; reason: string; url?: string }[],
+): string {
+	const lines = [`## Files from ${label}`, ""];
+
+	if (saved.length === 0) {
+		lines.push("Nothing to download.");
+	} else {
+		lines.push(`${saved.length} file${saved.length === 1 ? "" : "s"} saved to \`${dir}\`:`, "");
+		for (const file of saved) {
+			const icon = file.kind === "image" ? "🖼" : "📄";
+			lines.push(`- ${icon} \`${file.path}\` (${formatBytes(file.bytes)})`);
+		}
+		lines.push("", "Open them with the file-reading tool.");
+	}
+
+	if (skipped.length > 0) {
+		lines.push("", "Not saved:");
+		for (const file of skipped) {
+			// The URL is the fallback: it can be opened by hand where the download
+			// was refused.
+			lines.push(`- **${file.name}** — ${file.reason}${file.url ? `\n  ${file.url}` : ""}`);
+		}
+	}
+
 	return lines.join("\n");
 }

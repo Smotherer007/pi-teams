@@ -121,6 +121,13 @@ export interface MessageSummary {
 	mentions: PersonRef[];
 	reactions: MessageReaction[];
 	attachments: MessageAttachment[];
+	/**
+	 * URLs of the images embedded in the message body.
+	 *
+	 * Graph URLs, absolute and ready to fetch — Teams writes them into the HTML
+	 * as the `src` of each `<img>`. Empty for a text-only message.
+	 */
+	imageUrls: string[];
 	webUrl?: string;
 	/** Where the message lives — used for follow-up calls and scope checks */
 	location?: MessageLocation;
@@ -137,6 +144,8 @@ export interface MessageAttachment {
 	name?: string;
 	contentType?: string;
 	contentUrl?: string;
+	/** Small attachments arrive inline as base64 instead of a URL. */
+	contentBytes?: string;
 }
 
 export interface MessageLocation {

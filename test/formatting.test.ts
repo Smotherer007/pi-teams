@@ -7,6 +7,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
 	formatBytes,
+	formatDownloadResult,
 	formatMessage,
 	formatMessageList,
 	formatPresence,
@@ -24,6 +25,7 @@ const message = (overrides: Partial<MessageSummary> = {}): MessageSummary => ({
 	mentions: [],
 	reactions: [],
 	attachments: [],
+	imageUrls: [],
 	...overrides,
 });
 
@@ -110,6 +112,53 @@ describe("formatMessage", () => {
 	test("names attachments", () => {
 		const text = formatMessage(message({ attachments: [{ name: "spec.pdf" }] }));
 		assert.match(text, /spec\.pdf/);
+	});
+
+	test("says how many images there are, and where to get them", () => {
+		// The text of the message cannot carry the picture, so the count is the
+		// only clue that something is missing.
+		const text = formatMessage(
+			message({
+				imageUrls: [
+					"https://graph.microsoft.com/v1.0/chats/x/messages/y/hostedContents/a/$value",
+					"https://graph.microsoft.com/v1.0/chats/x/messages/y/hostedContents/b/$value",
+				],
+			}),
+		);
+		assert.match(text, /2 images — use teams_download_files/);
+	});
+
+	test("says nothing about images when there are none", () => {
+		assert.doesNotMatch(formatMessage(message()), /image/);
+	});
+});
+
+describe("formatDownloadResult", () => {
+	test("lists the saved files with their paths", () => {
+		const text = formatDownloadResult(
+			"Lauritz Loy",
+			"/tmp/files",
+			[{ path: "/tmp/files/a.png", name: "a.png", bytes: 2048, kind: "image" }],
+			[],
+		);
+		assert.match(text, /## Files from Lauritz Loy/);
+		assert.match(text, /\/tmp\/files\/a\.png/);
+		assert.match(text, /2\.0 KB/);
+	});
+
+	test("keeps the URL of a file it could not save", () => {
+		const text = formatDownloadResult(
+			"Chat",
+			"/tmp/files",
+			[],
+			[{ name: "deck.pptx", reason: "HTTP403", url: "https://contoso.sharepoint.com/deck.pptx" }],
+		);
+		assert.match(text, /deck\.pptx/);
+		assert.match(text, /contoso\.sharepoint\.com/);
+	});
+
+	test("says plainly when there was nothing to save", () => {
+		assert.match(formatDownloadResult("Chat", "/tmp/files", [], []), /Nothing to download/);
 	});
 });
 
