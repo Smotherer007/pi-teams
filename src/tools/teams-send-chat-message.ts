@@ -21,6 +21,7 @@ import { formatGraphError } from "../utils/errors.ts";
 import { resolveUserId } from "../graph/me.ts";
 import { auditWrite } from "../safety/audit.ts";
 import { assertAccess } from "../safety/index.ts";
+import { CHAT_MESSAGE_BODY_DESCRIPTION, CHAT_SHAPE_GUIDELINE } from "../utils/chat-style.ts";
 import { applyAiFooter } from "../utils/disclosure.ts";
 import { truncate } from "../utils/formatting.ts";
 import { requireChat } from "./resolve.ts";
@@ -56,10 +57,7 @@ export const teamsSendChatMessageTool = {
 		"where the mention should appear.",
 	parameters: Type.Object({
 		chat: Type.String({ description: "Chat ID, group chat topic, or a participant's name/e-mail" }),
-		body: Type.String({
-			description:
-				"Message text as lightweight markdown (bold, italics, code, bullets, numbered lists, links)",
-		}),
+		body: Type.String({ description: CHAT_MESSAGE_BODY_DESCRIPTION }),
 		account: AccountParam,
 		tenant: TenantParam,
 		mentions: Type.Optional(
@@ -79,7 +77,7 @@ export const teamsSendChatMessageTool = {
 		"Write the message in the user's voice — it is sent from their account, not from an assistant.",
 		"Show the user the exact text before sending when the intent is even slightly ambiguous.",
 		"Do not add signatures, or a note that the message was written by an AI: the sending tool appends the configured AI disclosure itself (on by default), so writing one into the body duplicates it.",
-		"Format for a chat, not for a document: lead with the answer, three short paragraphs at most, bullets for lists. Bold, italics, code, links and bullets are rendered; headings become bold lines and tables are not supported — keep those out.",
+		CHAT_SHAPE_GUIDELINE,
 		"Answer in the language of the conversation you are writing into, and match its register.",
 	],
 

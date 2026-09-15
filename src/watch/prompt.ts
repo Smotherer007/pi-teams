@@ -16,6 +16,7 @@
  */
 
 import type { MessageSummary, SignedInUser } from "../types.ts";
+import { CHAT_SHAPE_FOR_LISTEN_MODE } from "../utils/chat-style.ts";
 import type { WatchEvent } from "./loop.ts";
 
 function senderName(message: MessageSummary): string {
@@ -114,9 +115,7 @@ export function composeWatchPrompt(event: WatchEvent, me?: SignedInUser): string
 			"the sending tool appends the configured AI disclosure itself.",
 		"- If it does not: say so in one line and stop.",
 		"",
-		"Format it for a chat bubble, not a document: the answer first, three short paragraphs at most, " +
-			"bullets for anything enumerable, no tables. The recipient is not expecting this message, so it has " +
-			"to be readable at a glance.",
+		CHAT_SHAPE_FOR_LISTEN_MODE,
 		"",
 		"Do not react, do not touch other chats, and do not send anything to a channel.",
 	].join("\n");

@@ -131,36 +131,91 @@ instead of trying anyway.
 ## How to format a Teams message
 
 A Teams chat is a chat bubble, not a document. What arrives badly is long
-prose: the reader has to hunt for the point, and it reads as if a machine wrote
-it. The body is rendered as HTML — markdown is converted for you, so write
+prose: the answer is buried, the reader has to hunt for it, and it reads as if a
+machine wrote it. "Keep it short" does not fix that on its own — a shape does.
+The body is rendered as HTML, and markdown is converted for you, so write
 markdown and let the tool do the rest.
 
-**Reach for this shape, not for paragraphs:**
+**The shape, which is nearly always this:**
 
 ```
-Kurz: die QA-Umgebung läuft wieder.
+QA läuft wieder.
 
 - Ursache: abgelaufenes Zertifikat
 - Fix: erneuert und neu deployt
 - Offen: Monitoring für 90 Tage
 ```
 
-- **Lead with the answer.** The first line should work as the whole message for
-  someone who reads nothing else.
-- **Three short paragraphs at most.** If it needs more, it is a document — put
-  it in a file or a wiki page and link it.
+Line one is the answer. Then a blank line, then only what the reader needs in
+order to act on it. Five lines is already a long chat message.
+
+**Before and after.** Both versions say the same thing; only one is a chat:
+
+> **So nicht:** Ich habe mir die QA-Umgebung jetzt angeschaut und konnte den
+> Fehler reproduzieren. Das Problem liegt darin, dass das TLS-Zertifikat
+> abgelaufen war, wodurch alle Requests fehlgeschlagen sind. Ich habe es dann
+> erneuert und die Umgebung neu deployt, jetzt läuft wieder alles. Ich würde
+> allerdings noch empfehlen, das Monitoring einzurichten, damit das nicht
+> wieder passiert.
+
+> **So:** QA läuft wieder.
+>
+> - Ursache: abgelaufenes TLS-Zertifikat
+> - Fix: erneuert und neu deployt
+> - Empfehlung: Monitoring auf die Ablaufdaten
+
+**Three skeletons that cover most messages:**
+
+*Antwort auf eine Frage* — the answer, then at most one line of reasoning:
+
+```
+Ja, Freitag passt.
+
+Ich bin bis 14:00 im Workshop, danach jederzeit.
+```
+
+*Status* — outcome first, then what is still open:
+
+```
+Deployment ist durch, Release Notes stehen im Wiki: <Link>
+
+Offen: Smoke-Test auf Produktion, mache ich heute Nachmittag.
+```
+
+*Entscheidung nötig* — the decision, the options, the deadline:
+
+```
+Ich brauche bis morgen eine Entscheidung zum Sync-Intervall.
+
+- 5 Min: schnell, ~3× Last auf dem SAP-System
+- 15 Min: entspannt, dafür Verzögerung im Reporting
+```
+
+**Rules**
+
+- **The first line carries the message.** Someone who reads only that line
+  should know the outcome.
 - **Bullets for anything enumerable** — causes, options, next steps. Three items
-  and up belong in a list, not in a sentence with commas.
+  and up are a list; two are a sentence.
+- **One idea per line.** A line break is free; a clause chain held together by
+  commas is not.
 - **Bold the one thing that must not be missed**, and only that. Bold used
   everywhere is bold nowhere.
 - **Numbers, names and dates exactly as they are.** Do not round a figure or
   paraphrase a deadline into something friendlier.
 - **One question per message.** Two questions get one answer.
+- **No greeting and no closing.** "Hallo zusammen", "Ich habe mir das mal
+  angeschaut", "Kurz zusammengefasst:" and "Sag Bescheid, wenn du Fragen hast"
+  are all noise in a chat. The message starts with the answer and stops when it
+  is done.
+- **Over five lines, it is a document.** Put it in a wiki page or a file and send
+  the link with one sentence around it.
 
 **What Teams renders:** `**bold**`, `*italic*`, `` `code` ``, `~~struck~~`,
-`[label](url)`, `- bullets`, `1. numbered`, ``` fences. A `# heading` arrives as
-a bold line — fine for structure, not for hierarchy. **Tables are not supported
-in a chat**: convert them to bullets, or put the table in a file and link it.
+`[label](url)`, `- bullets`, `1. numbered`, and code fences. A `# heading`
+arrives as a bold line — fine for structure, not for hierarchy. **Tables are not
+supported in a chat**: convert them to bullets, or put the table in a file and
+link it.
 
 **Language and tone:** answer in the language of the conversation, in the
 register of the people in it. Short forms are normal in a chat ("passt", "ok,
@@ -323,9 +378,9 @@ teams_watch:
 2. If an answer is warranted, send it with `teams_send_chat_message` to the
    **chat ID from the prompt** — never re-resolve the chat by name. pi posts as
    the user, so the wrong chat is a wrong statement in the user's name.
-3. Keep it to the shape in *How to format a Teams message*: answer first, three
-   short paragraphs at most, bullets for lists. An unrequested message has to be
-   readable at a glance.
+3. Keep it to the shape in *How to format a Teams message*: the answer on the
+   first line, at most five short lines, bullets for anything enumerable. An
+   unrequested message has to be readable at a glance.
 4. If no answer is warranted, say so in one line and stop. Do not react, do not
    touch other chats, do not post to a channel.
 

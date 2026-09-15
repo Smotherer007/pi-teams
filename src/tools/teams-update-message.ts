@@ -14,6 +14,7 @@
 import { Type } from "typebox";
 import { updateMessage } from "../graph/messages.ts";
 import { auditWrite } from "../safety/audit.ts";
+import { CHAT_MESSAGE_BODY_DESCRIPTION, CHAT_SHAPE_GUIDELINE } from "../utils/chat-style.ts";
 import { applyAiFooter } from "../utils/disclosure.ts";
 import { requireChat } from "./resolve.ts";
 import {
@@ -36,7 +37,7 @@ export const teamsUpdateMessageTool = {
 		"Use this instead of deleting a message and sending a corrected copy.",
 	parameters: Type.Object({
 		messageId: Type.String({ description: "ID of the message to edit" }),
-		body: Type.String({ description: "The new message text (lightweight markdown by default)" }),
+		body: Type.String({ description: CHAT_MESSAGE_BODY_DESCRIPTION }),
 		chat: Type.String({ description: "Chat ID, group chat topic, or a participant's name/e-mail" }),
 		html: Type.Optional(Type.Boolean({ description: "Treat 'body' as raw HTML instead of markdown" })),
 		account: AccountParam,
@@ -45,6 +46,7 @@ export const teamsUpdateMessageTool = {
 	promptSnippet: "Edit a message the user sent in Teams",
 	promptGuidelines: [
 		"Use teams_update_message to correct a message the user already sent, rather than deleting it and posting a replacement.",
+		CHAT_SHAPE_GUIDELINE,
 	],
 
 	async execute(

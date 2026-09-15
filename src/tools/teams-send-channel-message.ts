@@ -10,6 +10,7 @@ import { Type } from "typebox";
 import { replyToChannelMessage, sendChannelMessage } from "../graph/messages.ts";
 import { resolveUserId } from "../graph/me.ts";
 import { auditWrite } from "../safety/audit.ts";
+import { CHAT_MESSAGE_BODY_DESCRIPTION, CHAT_SHAPE_GUIDELINE } from "../utils/chat-style.ts";
 import { applyAiFooter } from "../utils/disclosure.ts";
 import { assertAccess } from "../safety/index.ts";
 import { truncate } from "../utils/formatting.ts";
@@ -58,10 +59,7 @@ async function resolveMentions(
 const sharedParams = {
 	channel: Type.String({ description: "Channel name or ID, or a 'Team/Channel' path" }),
 	team: Type.Optional(Type.String({ description: "Team name or ID (omit when using a path)" })),
-	body: Type.String({
-			description:
-				"Message text as lightweight markdown (bold, italics, code, bullets, numbered lists, links)",
-		}),
+	body: Type.String({ description: CHAT_MESSAGE_BODY_DESCRIPTION }),
 	account: AccountParam,
 	tenant: TenantParam,
 	mentions: Type.Optional(
@@ -85,7 +83,7 @@ export const teamsSendChannelMessageTool = {
 	promptGuidelines: [
 		"Write in the user's voice — the post is attributed to them, not to an assistant.",
 		"Show the exact text and the target channel before posting when there is any ambiguity.",
-		"Format for a chat, not for a document: lead with the answer, three short paragraphs at most, bullets for lists. Bold, italics, code, links and bullets are rendered; headings become bold lines and tables are not supported — keep those out.",
+		CHAT_SHAPE_GUIDELINE,
 		"Answer in the language of the conversation you are writing into, and match its register.",
 	],
 
@@ -180,6 +178,7 @@ export const teamsReplyChannelMessageTool = {
 		messageId: Type.String({ description: "ID of the thread's opening message" }),
 	}),
 	promptSnippet: "Reply in a Teams channel thread as the user",
+	promptGuidelines: [CHAT_SHAPE_GUIDELINE],
 
 	async execute(
 		_toolCallId: string,
