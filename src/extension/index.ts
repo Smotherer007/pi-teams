@@ -53,6 +53,7 @@ import {
 	teamsSendChannelMessageTool,
 } from "../tools/teams-send-channel-message.ts";
 import { teamsListFilesTool } from "../tools/teams-list-files.ts";
+import { teamsDownloadFilesTool } from "../tools/teams-download-files.ts";
 import { teamsSearchMessagesTool } from "../tools/teams-search-messages.ts";
 import { teamsReactTool } from "../tools/teams-react.ts";
 import { teamsMarkReadTool } from "../tools/teams-mark-read.ts";
@@ -107,6 +108,7 @@ const tools = [
 	teamsSendChannelMessageTool,
 	teamsReplyChannelMessageTool,
 	teamsListFilesTool,
+	teamsDownloadFilesTool,
 	// Cross-cutting
 	teamsSearchMessagesTool,
 	teamsReactTool,

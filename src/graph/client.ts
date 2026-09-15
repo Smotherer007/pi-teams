@@ -131,6 +131,53 @@ export async function graphRequest<T = unknown>(
 	}
 }
 
+/**
+ * Download a Graph resource as bytes.
+ *
+ * `graphRequest` parses JSON, so the two things that are not JSON — the images
+ * embedded in a message and the files attached to it — come through here. Same
+ * token handling and throttling back-off; the body is returned as it arrived,
+ * because its content type is the only hint at what the file is.
+ */
+export async function graphDownload(
+	conn: TeamsConnection,
+	path: string,
+	options: RequestOptions = {},
+): Promise<{ data: Buffer; contentType?: string }> {
+	const maxRetries = options.maxRetries ?? 3;
+	// An absolute URL is allowed here too: Graph answers a hostedContent with a
+	// redirect to a pre-authenticated location, and `fetch` follows it.
+	const url = buildUrl(conn, path, options);
+
+	let attempt = 0;
+	for (;;) {
+		const token = await getAccessToken(conn, options.signal);
+
+		const response = await fetch(url, {
+			method: "GET",
+			headers: { Authorization: `Bearer ${token.accessToken}`, ...options.headers },
+			signal: options.signal,
+		});
+
+		if (response.ok) {
+			return {
+				data: Buffer.from(await response.arrayBuffer()),
+				contentType: response.headers.get("content-type") ?? undefined,
+			};
+		}
+
+		if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+			const retryAfter = Number(response.headers.get("Retry-After") ?? "0");
+			const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(2 ** attempt * 1000, 8000);
+			attempt += 1;
+			await sleep(waitMs);
+			continue;
+		}
+
+		throw await toGraphError(response);
+	}
+}
+
 async function toGraphError(response: Response): Promise<GraphError> {
 	let code = `HTTP${response.status}`;
 	let message = response.statusText || `Request failed with status ${response.status}`;

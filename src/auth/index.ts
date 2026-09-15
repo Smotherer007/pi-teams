@@ -235,10 +235,15 @@ export function defaultSignInMode(): SignInMode {
 
 export { browserUnavailableReason, canOpenBrowser };
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string, hint?: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const timer = setTimeout(() => {
-			reject(new AuthError("timeout", `${label} timed out after ${Math.round(ms / 1000)}s.`));
+			reject(
+				new AuthError(
+					"timeout",
+					`${label} timed out after ${Math.round(ms / 1000)}s.${hint ? ` ${hint}` : ""}`,
+				),
+			);
 		}, ms);
 		promise.then(
 			(value) => {
@@ -252,6 +257,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 		);
 	});
 }
+
+/**
+ * What it means when a browser sign-in never comes back.
+ *
+ * Three unrelated causes look identical from here: the browser opens and no
+ * callback ever arrives. Naming all of them in the timeout text is the
+ * difference between a five-second fix and hunting the launcher, which is
+ * usually innocent — so the text asks the one question that separates them.
+ */
+const BROWSER_TIMEOUT_HINT =
+	"The browser opened but nothing came back. Check what the browser showed: " +
+	"a consent that is still pending (AADSTS65004 — an admin request waiting under " +
+	"Enterprise applications), a Conditional Access policy that blocks the sign-in " +
+	"(AADSTS53003), or a redirect URI on the app registration that does not match " +
+	"this port (AADSTS50011). If no browser opened at all, the launcher is the " +
+	"problem: set PI_TEAMS_BROWSER to your own command, or open the URL that came " +
+	"with the error by hand.";
 
 /**
  * Sign in as the user.
@@ -289,6 +311,7 @@ export async function signIn(
 				}),
 				timeoutMs,
 				"Browser sign-in",
+				BROWSER_TIMEOUT_HINT,
 			);
 			if (!result) throw new AuthError("no_token", "Microsoft returned no token.");
 			return { ...toTokenInfo(result), mode: "interactive" };

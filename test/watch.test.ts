@@ -66,6 +66,7 @@ function message(overrides: Partial<MessageSummary> = {}): MessageSummary {
 		mentions: [],
 		reactions: [],
 		attachments: [],
+		imageUrls: [],
 		...overrides,
 	};
 }

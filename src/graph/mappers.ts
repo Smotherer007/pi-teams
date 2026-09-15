@@ -23,6 +23,7 @@ import type {
 	SignedInUser,
 	TeamSummary,
 } from "../types.ts";
+import { imageUrlsInHtml } from "../utils/attachments.ts";
 import { htmlToText } from "../utils/formatting.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -216,7 +217,19 @@ function mapAttachments(raw: Raw): MessageAttachment[] {
 		name: a.name ?? undefined,
 		contentType: a.contentType ?? undefined,
 		contentUrl: a.contentUrl ?? undefined,
+		contentBytes: a.contentBytes ?? undefined,
 	}));
+}
+
+/**
+ * Inline images, pulled out of the body before it is flattened to text.
+ *
+ * `htmlToText` turns every `<img>` into `[image: alt]`, which is right for a
+ * reader that only wants prose and wrong for one that could fetch the image:
+ * the URL it drops points at Graph.
+ */
+function mapImageUrls(raw: Raw): string[] {
+	return imageUrlsInHtml(raw.body?.content ?? "");
 }
 
 function mapMentions(raw: Raw): PersonRef[] {
@@ -241,6 +254,7 @@ export function mapMessage(raw: Raw, location?: MessageLocation): MessageSummary
 		mentions: mapMentions(raw),
 		reactions: mapReactions(raw),
 		attachments: mapAttachments(raw),
+		imageUrls: mapImageUrls(raw),
 		webUrl: raw.webUrl ?? undefined,
 		location,
 	};

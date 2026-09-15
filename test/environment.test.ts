@@ -12,6 +12,7 @@ import { browserUnavailableReason, canOpenBrowser, isWsl } from "../src/utils/en
 
 const TOUCHED = [
 	"PI_TEAMS_NO_BROWSER",
+	"PI_TEAMS_BROWSER",
 	"SSH_CONNECTION",
 	"SSH_TTY",
 	"SSH_CLIENT",
@@ -96,6 +97,21 @@ describe("canOpenBrowser", () => {
 
 	test("PI_TEAMS_NO_BROWSER forces the fallback anywhere", () => {
 		setPlatform("darwin");
+		process.env.PI_TEAMS_NO_BROWSER = "1";
+		assert.equal(canOpenBrowser(), false);
+	});
+
+	test("an explicit launcher counts, even over SSH", () => {
+		// The user has arranged for a browser to be reachable; the heuristics
+		// cannot know that, and overriding them is the point of the variable.
+		setPlatform("linux");
+		process.env.SSH_CONNECTION = "10.0.0.1 22 10.0.0.2 22";
+		process.env.PI_TEAMS_BROWSER = "/usr/local/bin/open";
+		assert.equal(canOpenBrowser(), true);
+	});
+
+	test("but PI_TEAMS_NO_BROWSER still wins over it", () => {
+		process.env.PI_TEAMS_BROWSER = "/usr/local/bin/open";
 		process.env.PI_TEAMS_NO_BROWSER = "1";
 		assert.equal(canOpenBrowser(), false);
 	});

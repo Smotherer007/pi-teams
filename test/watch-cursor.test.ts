@@ -75,6 +75,7 @@ function message(from: string): MessageSummary {
 		mentions: [],
 		reactions: [],
 		attachments: [],
+		imageUrls: [],
 	};
 }
 

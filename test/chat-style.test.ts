@@ -62,6 +62,7 @@ const MESSAGE: MessageSummary = {
 	mentions: [],
 	reactions: [],
 	attachments: [],
+	imageUrls: [],
 };
 
 /** Every tool that puts a body into a Teams message. */
