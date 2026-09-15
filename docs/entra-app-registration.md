@@ -81,8 +81,23 @@ AADSTS7000218: The request body must contain the following parameter:
 
 ## 3. API permissions
 
-**App registrations** → your app → **API permissions** → **Add a permission** →
-**Microsoft Graph** → **Delegated permissions**:
+**Entra admin center** → **Entra ID** → **App registrations** → your app →
+**API permissions**. Four clicks, and the third one is the one people get
+wrong:
+
+1. **Add a permission** — the button above the permission list.
+2. **Microsoft Graph** — the first tile under *Commonly used Microsoft APIs*.
+   Not *Azure DevOps*, not *Azure Storage*: those are different APIs and their
+   permissions will not help.
+3. **Delegated permissions**, *not* **Application permissions**. pi acts as you.
+   An application permission would give the app its own identity and a
+   completely different consent model — and the two tiles sit directly under
+   each other, which is why this is the usual mistake.
+4. Type each name into **Start typing a permission to filter these results**,
+   tick the box, and press **Add permissions** once at the end. Nothing is
+   saved until that button is pressed, so a half-filled list can be closed.
+
+What you should end up ticking:
 
 | Permission | Needed for |
 |---|---|
@@ -99,7 +114,25 @@ AADSTS7000218: The request body must contain the following parameter:
 | `Files.Read.All`, `Sites.Read.All` | channel files |
 
 `openid`, `profile` and `offline_access` are deliberately absent: MSAL always
-requests them and rejects them in an explicit scope list.
+requests them and rejects them in an explicit scope list. (You will still see
+them in the picker, under **OpenId permissions**. Leave them alone.)
+
+### The Admin consent required column
+
+After adding them, the list has a column that decides whether step 4 is a
+five-second job or a ticket to your administrator:
+
+| Permission | Admin consent required |
+|---|---|
+| `ChannelMessage.Read.All` | **Yes** — reading channels and threads |
+| `ChannelMember.Read.All` | **Yes** — channel member lists |
+| `ChatMember.ReadWrite` | **Yes** — only if you added it, see below |
+| everything else in the list above | No |
+
+The column shows the *default* for an organization, and a tenant can relax it
+per permission, per user or per app — read it as "expect to need an admin", not
+as a property of the permission itself. The scopes showing **Yes** are the ones
+step 4 is about.
 
 **What is not needed:** no client secret, no certificate, no redirect URI beyond
 step 2, no application (as opposed to delegated) permissions.
@@ -112,7 +145,7 @@ again:
 
 | Permission | Unlocks | Consent |
 |---|---|---|
-| `ChatMember.ReadWrite` | removing someone from a chat (`teams_chat_members`) | user |
+| `ChatMember.ReadWrite` | removing someone from a chat (`teams_chat_members`) | **admin** — the portal shows it as *Admin consent required: Yes*, and the tool says which scope is missing until it is granted |
 
 Without it the tool answers with the exact scope it is missing instead of
 failing at Graph with a consent error. Editing and deleting chat messages,
@@ -183,6 +216,12 @@ Or edit `~/.pi/agent/pi-teams.json` directly — the same file, mode `0600`:
    with your own credentials and MFA, and the page closes itself. Nothing to
    copy or type. Over SSH or in a container, pi falls back to the device code
    flow and shows a short code to enter on any device.
+
+   In **WSL** the URL is handed to Windows PowerShell, so the browser on the
+   Windows side opens — no X server and no `DISPLAY` needed. A launcher that
+   cannot be started is reported as an error; if you are upgrading from a
+   version that hung here instead, see the last row of the troubleshooting
+   table.
 2. `teams_status` — who pi acts as, which token is cached, what it may do.
 3. `teams_doctor` — checks configuration, sign-in, granted scopes and
    connectivity in one go. It reports a missing consent as a **named
@@ -223,9 +262,12 @@ that tenant on its own.
 | `AADSTS50011` — *redirect URI mismatch* | an exact URI is registered that does not match the chosen port | register the port-less `http://localhost`, or pin the port in the same file |
 | `AADSTS7000218` — *client_assertion or client_secret* | **Allow public client flows** is off | step 2b |
 | `AADSTS65001` — *consent required* | permissions added but never consented | sign in again; for the two admin scopes, step 4 |
+| `AADSTS65004` — *request pending* | an **admin consent request** is waiting for approval, or consent was declined once | step 4: an administrator presses **Grant admin consent**. A pending request is under **Enterprise applications** → your app → **Permissions**. Until it is approved the browser comes back with this code instead of a token |
+| `AADSTS53003` — *blocked by Conditional Access* | a policy requires a managed or compliant device, which the **device code** flow cannot satisfy | this is why the browser sign-in has to work rather than quietly fall back: on such a tenant the device code route is a dead end, not a fallback. Use a machine that satisfies the policy, or add pi's loopback redirect to it |
 | `AADSTS50020` — *not a member of the tenant* | wrong tenant, no guest account, or the app is single-tenant | steps 1 and 7 |
 | `AADSTS700016` — *application not found in directory* | wrong tenant ID or client ID | recheck `<DIRECTORY_TENANT_ID>` and `<APPLICATION_CLIENT_ID>` |
 | signed out after about an hour | the tenant grants no `offline_access` | the app needs a refresh token to renew silently; without it, run `teams_login` when the session expires. `teams_doctor` names the missing scope |
+| browser never opens from WSL | older versions called `xdg-open`, which a plain WSL distro does not have — and the failure was swallowed | update pi-teams: current versions hand the URL to Windows PowerShell. If `/mnt/c` is not mounted, set `PI_TEAMS_NO_BROWSER=1` and use the device code flow — see `AADSTS53003` if Conditional Access blocks that |
 
 Run `teams_doctor` first for anything in this table: it validates the
 configuration, the cached session, the granted scopes and the connection to
