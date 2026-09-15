@@ -135,7 +135,17 @@ export function browserLaunch(
 		const quoted = url.replace(/'/g, "''");
 		return {
 			command: WSL_POWERSHELL,
-			args: ["-NoProfile", "-NonInteractive", "-Command", `Start-Process '${quoted}'`],
+			args: [
+				"-NoProfile",
+				"-NonInteractive",
+				// Without this a console window flashes on the Windows side for the
+				// fraction of a second the launcher is alive. Cosmetic, but the kind
+				// of cosmetic that makes a tool feel broken on every single sign-in.
+				"-WindowStyle",
+				"Hidden",
+				"-Command",
+				`Start-Process '${quoted}'`,
+			],
 		};
 	}
 
