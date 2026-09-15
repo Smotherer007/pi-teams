@@ -16,7 +16,13 @@ import {
 	tryResolveConnection,
 	type TeamsConnection,
 } from "../config/index.ts";
-import { buildConnectionCard, buildConnectionLabel, formatStatusText, type ConnectionCard } from "../status.ts";
+import {
+	buildConnectionCard,
+	buildConnectionLabel,
+	buildStartupNotice,
+	formatStatusText,
+	type ConnectionCard,
+} from "../status.ts";
 import {
 	blockReason,
 	formatMutationSummary,
@@ -416,10 +422,8 @@ export default function (pi: ExtensionAPI) {
 				"warning",
 			);
 		} else {
-			ctx.ui.notify(
-				`@patimweb/pi-teams loaded (${card.account}${card.user ? ` as ${card.user}` : ""}, safety: ${card.safetyLevel})`,
-				"info",
-			);
+			const notice = buildStartupNotice(card, connection.watch);
+			ctx.ui.notify(notice.message, notice.level);
 		}
 
 		// Survives /reload, so the transcript keeps saying who pi is acting as.

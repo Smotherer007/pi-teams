@@ -90,6 +90,31 @@ export function buildConnectionLabel(card: ConnectionCard | undefined): string {
 	return `✓ Teams · ${scope}${card.user ? ` · ${card.user}` : ""}${listening}`;
 }
 
+/**
+ * The line a session starts with.
+ *
+ * It names listen mode on purpose. The watcher starts from the saved setting, so
+ * a session can begin polling — and answering in your name — without the
+ * transcript ever saying so, which is how a listener nobody remembers starting
+ * turns up, and how it gets to answer before anyone notices.
+ *
+ * The level is part of the answer: being listened to is the state worth a louder
+ * notice, not the ordinary one of it being off.
+ */
+export function buildStartupNotice(
+	card: ConnectionCard,
+	watch: { enabled: boolean; intervalSeconds: number },
+): { message: string; level: "info" | "warning" } {
+	const identity = `@patimweb/pi-teams loaded (${card.account}${card.user ? ` as ${card.user}` : ""}, safety: ${card.safetyLevel})`;
+
+	if (!watch.enabled) return { message: `${identity} · listen mode off`, level: "info" };
+
+	return {
+		message: `${identity} · listen mode ON — every ${watch.intervalSeconds} s, /teams-listen off to stop`,
+		level: "warning",
+	};
+}
+
 /** Rich markdown for `/teams-status` and the expanded card. */
 export function formatStatusText(card: ConnectionCard | undefined): string {
 	if (!card) {
