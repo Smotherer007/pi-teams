@@ -66,8 +66,15 @@ describe("browserLaunch", () => {
 	test("WSL hands the URL to Windows PowerShell instead", () => {
 		const launch = browserLaunch("https://example.com", { platform: "linux", wsl: true });
 		assert.match(launch.command, /WindowsPowerShell\/v1\.0\/powershell\.exe$/);
-		assert.deepEqual(launch.args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
-		assert.equal(launch.args[3], "Start-Process 'https://example.com'");
+		assert.deepEqual(launch.args.slice(0, -1), [
+			"-NoProfile",
+			"-NonInteractive",
+			// Without Hidden, a console window flashes on every sign-in.
+			"-WindowStyle",
+			"Hidden",
+			"-Command",
+		]);
+		assert.equal(launch.args.at(-1), "Start-Process 'https://example.com'");
 	});
 
 	test("an authorize URL keeps every & through the handoff", () => {
@@ -75,16 +82,17 @@ describe("browserLaunch", () => {
 		// the browser got a truncated URL and the sign-in waited for a redirect
 		// that could never arrive. The URL has to arrive whole, in one argument.
 		const launch = browserLaunch(URL_WITH_QUERY, { platform: "linux", wsl: true });
-		assert.equal(launch.args.length, 4, "the URL must stay a single argument");
-		assert.equal(launch.args[3]?.split("&").length, URL_WITH_QUERY.split("&").length);
-		assert.ok(launch.args[3]?.includes(URL_WITH_QUERY));
+		const payload = launch.args.at(-1) as string;
+		assert.equal(launch.args.length, 6, "the URL must stay a single argument");
+		assert.equal(payload.split("&").length, URL_WITH_QUERY.split("&").length);
+		assert.ok(payload.includes(URL_WITH_QUERY));
 	});
 
 	test("a single quote in the URL is doubled, not dropped", () => {
 		// PowerShell ends a single-quoted string at the first quote, so an
 		// unescaped one would truncate the URL just as fatally as & does.
 		const launch = browserLaunch("https://example.com/a'b", { platform: "linux", wsl: true });
-		assert.equal(launch.args[3], "Start-Process 'https://example.com/a''b'");
+		assert.equal(launch.args.at(-1), "Start-Process 'https://example.com/a''b'");
 	});
 
 	test("WSL is recognised from the environment when no target is given", () => {
