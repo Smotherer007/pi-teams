@@ -12,10 +12,16 @@
  * The interactive sign-in needs two things: a browser to open, and a loopback
  * listener that browser can reach. Over SSH both assumptions break — `open`
  * would launch a browser on the *remote* machine, where nobody is looking — so
- * those sessions get the device code flow instead.
+ * those sessions get the device code flow instead. In WSL the browser is on
+ * the Windows side of the same machine, which is what `isWsl` accounts for.
  *
  * Set `PI_TEAMS_NO_BROWSER=1` to force that fallback anywhere.
  */
+export function isWsl(): boolean {
+	if (process.platform !== "linux") return false;
+	return !!(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP);
+}
+
 export function canOpenBrowser(): boolean {
 	if (process.env.PI_TEAMS_NO_BROWSER) return false;
 
@@ -23,6 +29,11 @@ export function canOpenBrowser(): boolean {
 	if (process.env.SSH_CONNECTION || process.env.SSH_TTY || process.env.SSH_CLIENT) return false;
 
 	if (process.platform === "darwin" || process.platform === "win32") return true;
+
+	// WSL is not a headless Linux: the browser lives on Windows and `openBrowser`
+	// hands the URL over to it. DISPLAY says nothing either way — WSLg sets it on
+	// Windows 11 and not on Windows 10, while the handoff works on both.
+	if (isWsl()) return true;
 
 	// Linux and the BSDs need a display server for a browser to appear at all.
 	return !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);

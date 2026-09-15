@@ -8,7 +8,7 @@
 
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { browserUnavailableReason, canOpenBrowser } from "../src/utils/environment.ts";
+import { browserUnavailableReason, canOpenBrowser, isWsl } from "../src/utils/environment.ts";
 
 const TOUCHED = [
 	"PI_TEAMS_NO_BROWSER",
@@ -17,6 +17,8 @@ const TOUCHED = [
 	"SSH_CLIENT",
 	"DISPLAY",
 	"WAYLAND_DISPLAY",
+	"WSL_DISTRO_NAME",
+	"WSL_INTEROP",
 ];
 
 let saved: Record<string, string | undefined> = {};
@@ -72,10 +74,41 @@ describe("canOpenBrowser", () => {
 		assert.equal(canOpenBrowser(), false);
 	});
 
+	test("WSL can, because the browser is on the Windows side", () => {
+		// The regression this guards: WSLg sets DISPLAY on Windows 11 but not on
+		// Windows 10, so keying off DISPLAY made the same distro reachable on one
+		// host and "headless" on the other.
+		setPlatform("linux");
+		process.env.WSL_DISTRO_NAME = "Ubuntu";
+		assert.equal(canOpenBrowser(), true);
+
+		delete process.env.WSL_DISTRO_NAME;
+		process.env.WSL_INTEROP = "/run/WSL/1_interop";
+		assert.equal(canOpenBrowser(), true);
+	});
+
+	test("an SSH session into WSL still cannot", () => {
+		setPlatform("linux");
+		process.env.WSL_DISTRO_NAME = "Ubuntu";
+		process.env.SSH_CONNECTION = "10.0.0.1 22 10.0.0.2 22";
+		assert.equal(canOpenBrowser(), false);
+	});
+
 	test("PI_TEAMS_NO_BROWSER forces the fallback anywhere", () => {
 		setPlatform("darwin");
 		process.env.PI_TEAMS_NO_BROWSER = "1";
 		assert.equal(canOpenBrowser(), false);
+	});
+});
+
+describe("isWsl", () => {
+	test("needs the Linux platform as well as the marker", () => {
+		setPlatform("darwin");
+		process.env.WSL_DISTRO_NAME = "Ubuntu";
+		assert.equal(isWsl(), false);
+
+		setPlatform("linux");
+		assert.equal(isWsl(), true);
 	});
 });
 

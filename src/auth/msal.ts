@@ -7,7 +7,7 @@
  * whether a browser is actually reachable, and open it.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
 	ConfidentialClientApplication,
 	LogLevel,
@@ -15,7 +15,7 @@ import {
 	type Configuration,
 } from "@azure/msal-node";
 import type { TeamsConnection } from "../config/index.ts";
-import { browserUnavailableReason, canOpenBrowser } from "../utils/environment.ts";
+import { browserUnavailableReason, canOpenBrowser, isWsl } from "../utils/environment.ts";
 import { createCachePlugin } from "./cache-plugin.ts";
 
 export { browserUnavailableReason, canOpenBrowser };
@@ -101,30 +101,137 @@ export function resetApps(): void {
 // Browser
 // ---------------------------------------------------------------------------
 
-/** Open a URL in the user's default browser, detached from this process. */
-export function openBrowser(url: string): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const [command, args] =
-			process.platform === "darwin"
-				? ["open", [url]]
-				: process.platform === "win32"
-					? // `start` is a shell builtin, and the empty string is the window
-						// title cmd.exe would otherwise take the URL for.
-						["cmd.exe", ["/c", "start", "", url]]
-					: ["xdg-open", [url]];
+/**
+ * The Windows-side shell a WSL session hands its URL to.
+ *
+ * Windows PowerShell rather than `cmd.exe`: the authorize URL carries several
+ * `&`, and `cmd /c start` reads the first of them as a command separator and
+ * opens a truncated URL. Single quotes survive them.
+ */
+const WSL_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
 
+/** How long to wait for a launcher that neither exits nor errors. */
+const LAUNCH_EXIT_GRACE_MS = 2000;
+
+/**
+ * The command that puts `url` in front of the user in a browser.
+ *
+ * Split out of `openBrowser` so the shapes stay testable: the Windows and WSL
+ * forms are easy to get subtly wrong, and all of them fail quietly when they
+ * are.
+ */
+export function browserLaunch(
+	url: string,
+	target: { platform?: NodeJS.Platform; wsl?: boolean } = {},
+): { command: string; args: string[] } {
+	const platform = target.platform ?? process.platform;
+
+	if (target.wsl ?? isWsl()) {
+		// Escaping a quote inside a PowerShell single-quoted string means doubling
+		// it. Nothing else in the URL needs attention.
+		const quoted = url.replace(/'/g, "''");
+		return {
+			command: WSL_POWERSHELL,
+			args: ["-NoProfile", "-NonInteractive", "-Command", `Start-Process '${quoted}'`],
+		};
+	}
+
+	if (platform === "darwin") return { command: "open", args: [url] };
+
+	if (platform === "win32") {
+		// `start` is a shell builtin, and the empty string is the window title
+		// cmd.exe would otherwise take the URL for.
+		return { command: "cmd.exe", args: ["/c", "start", "", url] };
+	}
+
+	return { command: "xdg-open", args: [url] };
+}
+
+/**
+ * Run a launcher and wait until it is clear whether it worked.
+ *
+ * Two things have to be caught, and both were lost when this resolved on spawn.
+ * A missing launcher — `xdg-open` on a fresh WSL distro — reports ENOENT on
+ * `error` and never exits. A launcher that is present but finds no browser
+ * exits non-zero, which is how `xdg-open` says so.
+ *
+ * Resolving on spawn made both look like success, so the sign-in sat waiting
+ * for a redirect from a browser that had never opened, until the five minute
+ * timeout replaced the real cause with "Browser sign-in timed out".
+ */
+export function launchBrowser(
+	command: string,
+	args: string[],
+	graceMs = LAUNCH_EXIT_GRACE_MS,
+): Promise<void> {
+	return new Promise((resolve, reject) => {
+		let child: ChildProcess;
 		try {
-			const child = spawn(command as string, args as string[], {
-				detached: true,
-				stdio: "ignore",
-			});
-			child.on("error", reject);
-			child.unref();
-			resolve();
+			child = spawn(command, args, { detached: true, stdio: ["ignore", "ignore", "pipe"] });
 		} catch (err) {
 			reject(err instanceof Error ? err : new Error(String(err)));
+			return;
 		}
+
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let stderr = "";
+
+		child.stderr?.on("data", (chunk: Buffer) => {
+			stderr += String(chunk);
+		});
+
+		const settle = (err?: Error) => {
+			if (settled) return;
+			settled = true;
+			if (timer) clearTimeout(timer);
+			child.unref();
+			if (err) reject(err);
+			else resolve();
+		};
+
+		// A launcher that stays alive is waiting on the browser, not failing.
+		timer = setTimeout(() => settle(), graceMs);
+
+		child.once("error", (err: NodeJS.ErrnoException) => {
+			const detail = err.code === "ENOENT" ? `${command} was not found` : err.message;
+			settle(new Error(`could not open a browser: ${detail}`));
+		});
+
+		child.once("close", (code, signal) => {
+			if (code === 0) settle();
+			else {
+				// `close`, not `exit`: the exit event can fire before the stderr pipe has
+				// drained, and the reason xdg-open gives is on stderr.
+				const why = stderr.trim() ? `: ${stderr.trim()}` : "";
+				settle(
+					new Error(
+						`could not open a browser: ${command} exited with ` +
+							`${code === null ? `signal ${signal ?? "unknown"}` : `code ${code}`}${why}`,
+					),
+				);
+			}
+		});
 	});
+}
+
+/** Open a URL in the user's default browser, detached from this process. */
+export async function openBrowser(url: string): Promise<void> {
+	const { command, args } = browserLaunch(url);
+
+	try {
+		await launchBrowser(command, args);
+	} catch (err) {
+		const cause = err instanceof Error ? err.message : String(err);
+		if (isWsl()) {
+			throw new Error(
+				`${cause}. From WSL the URL is handed to Windows PowerShell at ` +
+					`${WSL_POWERSHELL}; if the Windows drive is not mounted there, set ` +
+					"PI_TEAMS_NO_BROWSER=1 to use the device code flow instead.",
+			);
+		}
+		throw err instanceof Error ? err : new Error(cause);
+	}
 }
 
 // ---------------------------------------------------------------------------
