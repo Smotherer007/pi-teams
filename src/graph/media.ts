@@ -142,6 +142,11 @@ export async function saveMessageFiles(
 		}
 
 		if (!attachment.contentUrl) {
+			// A forwarded message is not a file being withheld: its images and files
+			// are hosted content of the message that carries it, and they are fetched
+			// above. Listing it as unsaved would put a line of noise under every
+			// forwarded message.
+			if (attachment.contentType === "forwardedMessageReference") continue;
 			skipped.push({ name: label, reason: describeMissing(attachment) });
 			continue;
 		}

@@ -23,7 +23,7 @@ import type {
 	SignedInUser,
 	TeamSummary,
 } from "../types.ts";
-import { imageUrlsInHtml } from "../utils/attachments.ts";
+import { collectStrings, imageUrlsInHtml } from "../utils/attachments.ts";
 import { htmlToText } from "../utils/formatting.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -227,9 +227,31 @@ function mapAttachments(raw: Raw): MessageAttachment[] {
  * `htmlToText` turns every `<img>` into `[image: alt]`, which is right for a
  * reader that only wants prose and wrong for one that could fetch the image:
  * the URL it drops points at Graph.
+ *
+ * A forwarded message keeps its images out of the outer body. The original
+ * travels as an attachment of type `forwardedMessageReference`, with the whole
+ * message in its `content` — as a JSON string, and nested again if that one had
+ * been forwarded too. Searching every string inside it finds the images without
+ * modelling that shape, which would only ever be one Graph change out of date.
  */
 function mapImageUrls(raw: Raw): string[] {
-	return imageUrlsInHtml(raw.body?.content ?? "");
+	const candidates: string[] = [];
+	if (typeof raw.body?.content === "string") candidates.push(raw.body.content);
+
+	for (const attachment of raw.attachments ?? []) {
+		if (typeof attachment?.content !== "string") continue;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(attachment.content);
+		} catch {
+			// Not JSON: search it as it stands rather than dropping it.
+			candidates.push(attachment.content);
+			continue;
+		}
+		collectStrings(parsed, candidates);
+	}
+
+	return imageUrlsInHtml(candidates.join("\n"));
 }
 
 function mapMentions(raw: Raw): PersonRef[] {

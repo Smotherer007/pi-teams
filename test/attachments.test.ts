@@ -10,6 +10,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+	collectStrings,
 	extensionForContentType,
 	imageUrlsInHtml,
 	safeFileName,
@@ -67,6 +68,61 @@ describe("mapMessage", () => {
 	test("leaves imageUrls empty for a text-only message", () => {
 		const summary = mapMessage({ id: "1", body: { contentType: "text", content: "hi" } });
 		assert.deepEqual(summary.imageUrls, []);
+	});
+
+	test("finds the images of a forwarded message", () => {
+		// The regression Lauritz hit: a forwarded message keeps its picture out of
+		// the outer body. Graph sends the original as an attachment of type
+		// forwardedMessageReference, with the whole message in `content` — as a
+		// JSON string, so the quotes in its HTML arrive escaped. Searching only the
+		// body found nothing, and the message came back as "no content URL".
+		const forwarded = {
+			id: MESSAGE_ID,
+			body: { contentType: "html", content: "<p>schau mal</p>" },
+			attachments: [
+				{
+					id: "fwd-1",
+					contentType: "forwardedMessageReference",
+					content: JSON.stringify({
+						body: { contentType: "html", content: `<p><img src="${HOSTED("fwd")}" alt="Bild"></p>` },
+					}),
+				},
+			],
+		};
+		assert.deepEqual(mapMessage(forwarded).imageUrls, [HOSTED("fwd")]);
+	});
+
+	test("finds them through a forward of a forward", () => {
+		const nested = JSON.stringify({
+			attachments: [
+				{ contentType: "forwardedMessageReference", content: JSON.stringify({ body: { content: `<img src="${HOSTED("deep")}">` } }) },
+			],
+		});
+		const summary = mapMessage({
+			id: "1",
+			body: { contentType: "html", content: "<p>fwd</p>" },
+			attachments: [{ contentType: "forwardedMessageReference", content: nested }],
+		});
+		assert.deepEqual(summary.imageUrls, [HOSTED("deep")]);
+	});
+
+	test("still searches an attachment whose content is not JSON", () => {
+		const summary = mapMessage({
+			id: "1",
+			body: { contentType: "html", content: "<p>hi</p>" },
+			attachments: [{ contentType: "text/html", content: `<img src="${HOSTED("raw")}">` }],
+		});
+		assert.deepEqual(summary.imageUrls, [HOSTED("raw")]);
+	});
+});
+
+describe("collectStrings", () => {
+	test("reaches strings at any depth", () => {
+		assert.deepEqual(collectStrings({ a: "one", b: [{ c: "two" }], d: 3, e: null }), ["one", "two"]);
+	});
+
+	test("returns nothing for a value with no strings", () => {
+		assert.deepEqual(collectStrings({ a: 1, b: true, c: null }), []);
 	});
 });
 
