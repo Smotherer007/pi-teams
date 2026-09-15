@@ -122,8 +122,11 @@ const LAUNCH_EXIT_GRACE_MS = 2000;
  */
 export function browserLaunch(
 	url: string,
-	target: { platform?: NodeJS.Platform; wsl?: boolean } = {},
+	target: { platform?: NodeJS.Platform; wsl?: boolean; browser?: string } = {},
 ): { command: string; args: string[] } {
+	const override = (target.browser ?? process.env.PI_TEAMS_BROWSER)?.trim();
+	if (override) return overrideLaunch(url, override);
+
 	const platform = target.platform ?? process.platform;
 
 	if (target.wsl ?? isWsl()) {
@@ -145,6 +148,52 @@ export function browserLaunch(
 	}
 
 	return { command: "xdg-open", args: [url] };
+}
+
+/**
+ * A launcher the user supplied through `PI_TEAMS_BROWSER`.
+ *
+ * Takes a complete command line. `{}` in any argument is replaced by the URL;
+ * without it the URL is appended. This is the escape hatch for a WSL distro
+ * with no `xdg-open`: point it at a script, or at a Windows binary, instead of
+ * installing a shim for every program on the machine.
+ */
+function overrideLaunch(url: string, override: string): { command: string; args: string[] } {
+	const [command, ...rest] = splitCommandLine(override);
+	if (!command) throw new Error("PI_TEAMS_BROWSER is set but names no command.");
+
+	if (rest.some((part) => part.includes("{}"))) {
+		return { command, args: rest.map((part) => part.replaceAll("{}", url)) };
+	}
+	return { command, args: [...rest, url] };
+}
+
+/** Split on whitespace, honouring simple quoting. No expansion, no escaping. */
+function splitCommandLine(input: string): string[] {
+	const parts: string[] = [];
+	let current = "";
+	let quote: string | undefined;
+
+	for (const char of input) {
+		if (quote) {
+			if (char === quote) quote = undefined;
+			else current += char;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current) parts.push(current);
+			current = "";
+			continue;
+		}
+		current += char;
+	}
+
+	if (current) parts.push(current);
+	return parts;
 }
 
 /**
@@ -223,14 +272,18 @@ export async function openBrowser(url: string): Promise<void> {
 		await launchBrowser(command, args);
 	} catch (err) {
 		const cause = err instanceof Error ? err.message : String(err);
+		// The URL goes in every failure message. An exact exit code is only ever a
+		// hint — a shim and some real xdg-open implementations exit 0 without
+		// showing anything — so the one thing that always works is the address
+		// itself, pasted into a browser by hand.
+		const fallback = `Open it by hand instead: ${url}`;
 		if (isWsl()) {
 			throw new Error(
-				`${cause}. From WSL the URL is handed to Windows PowerShell at ` +
-					`${WSL_POWERSHELL}; if the Windows drive is not mounted there, set ` +
-					"PI_TEAMS_NO_BROWSER=1 to use the device code flow instead.",
+				`${cause}. ${fallback} — from WSL the handoff expects Windows PowerShell at ` +
+					`${WSL_POWERSHELL}; set PI_TEAMS_BROWSER to use your own command instead.`,
 			);
 		}
-		throw err instanceof Error ? err : new Error(cause);
+		throw new Error(`${cause}. ${fallback}`);
 	}
 }
 

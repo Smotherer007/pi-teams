@@ -16,8 +16,8 @@ import assert from "node:assert/strict";
 import { browserLaunch, launchBrowser } from "../src/auth/msal.ts";
 
 const realPlatform = process.platform;
-const WSL_VARS = ["WSL_DISTRO_NAME", "WSL_INTEROP"];
-let savedWsl: Record<string, string | undefined> = {};
+const SCRUBBED = ["WSL_DISTRO_NAME", "WSL_INTEROP", "PI_TEAMS_BROWSER"];
+let savedEnv: Record<string, string | undefined> = {};
 
 function setPlatform(value: NodeJS.Platform): void {
 	Object.defineProperty(process, "platform", { value, configurable: true });
@@ -29,12 +29,12 @@ const URL_WITH_QUERY =
 	"?client_id=abc&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A3000&scope=User.Read";
 
 beforeEach(() => {
-	savedWsl = Object.fromEntries(WSL_VARS.map((key) => [key, process.env[key]]));
-	for (const key of WSL_VARS) delete process.env[key];
+	savedEnv = Object.fromEntries(SCRUBBED.map((key) => [key, process.env[key]]));
+	for (const key of SCRUBBED) delete process.env[key];
 });
 
 afterEach(() => {
-	for (const [key, value] of Object.entries(savedWsl)) {
+	for (const [key, value] of Object.entries(savedEnv)) {
 		if (value === undefined) delete process.env[key];
 		else process.env[key] = value;
 	}
@@ -96,6 +96,42 @@ describe("browserLaunch", () => {
 	test("WSL without the marker falls back to xdg-open", () => {
 		setPlatform("linux");
 		assert.equal(browserLaunch("https://example.com").command, "xdg-open");
+	});
+
+	test("PI_TEAMS_BROWSER replaces the platform default", () => {
+		setPlatform("linux");
+		process.env.PI_TEAMS_BROWSER = "my-opener --quiet";
+		assert.deepEqual(browserLaunch("https://example.com"), {
+			command: "my-opener",
+			args: ["--quiet", "https://example.com"],
+		});
+	});
+
+	test("PI_TEAMS_BROWSER puts the URL where the {} is", () => {
+		// So a launcher that wants the URL in the middle of its own flags works
+		// without a wrapper script around it.
+		process.env.PI_TEAMS_BROWSER = "/usr/local/bin/open --url={} --new-window";
+		assert.deepEqual(browserLaunch("https://example.com"), {
+			command: "/usr/local/bin/open",
+			args: ["--url=https://example.com", "--new-window"],
+		});
+	});
+
+	test("a quoted PI_TEAMS_BROWSER keeps its arguments together", () => {
+		process.env.PI_TEAMS_BROWSER = '"/mnt/c/Program Files/App/open.exe" --quiet';
+		assert.deepEqual(browserLaunch("https://example.com"), {
+			command: "/mnt/c/Program Files/App/open.exe",
+			args: ["--quiet", "https://example.com"],
+		});
+	});
+
+	test("the override beats the WSL handoff, and keeps the & intact", () => {
+		setPlatform("linux");
+		process.env.WSL_DISTRO_NAME = "Ubuntu";
+		process.env.PI_TEAMS_BROWSER = "my-opener";
+		const launch = browserLaunch(URL_WITH_QUERY);
+		assert.equal(launch.command, "my-opener");
+		assert.equal(launch.args.at(-1), URL_WITH_QUERY);
 	});
 });
 

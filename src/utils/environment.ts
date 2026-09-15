@@ -15,7 +15,9 @@
  * those sessions get the device code flow instead. In WSL the browser is on
  * the Windows side of the same machine, which is what `isWsl` accounts for.
  *
- * Set `PI_TEAMS_NO_BROWSER=1` to force that fallback anywhere.
+ * Set `PI_TEAMS_NO_BROWSER=1` to force that fallback anywhere, or
+ * `PI_TEAMS_BROWSER` to a command line that opens a URL where the built-in
+ * launchers cannot.
  */
 export function isWsl(): boolean {
 	if (process.platform !== "linux") return false;
@@ -24,6 +26,11 @@ export function isWsl(): boolean {
 
 export function canOpenBrowser(): boolean {
 	if (process.env.PI_TEAMS_NO_BROWSER) return false;
+
+	// An explicit launcher is a statement that a browser is reachable, even where
+	// the heuristics below would not find one — a WSL setup, or a machine whose
+	// browser is reached through something custom.
+	if (process.env.PI_TEAMS_BROWSER?.trim()) return true;
 
 	// A remote shell: the browser would appear on the wrong machine.
 	if (process.env.SSH_CONNECTION || process.env.SSH_TTY || process.env.SSH_CLIENT) return false;
@@ -41,8 +48,7 @@ export function canOpenBrowser(): boolean {
 
 /** Why the interactive flow is unavailable, phrased for a user-facing message. */
 export function browserUnavailableReason(): string {
-	if (process.env.PI_TEAMS_NO_BROWSER) return "PI_TEAMS_NO_BROWSER is set";
-	if (process.env.SSH_CONNECTION || process.env.SSH_TTY || process.env.SSH_CLIENT) {
+	if (process.env.PI_TEAMS_NO_BROWSER) return "PI_TEAMS_NO_BROWSER is set";	if (process.env.SSH_CONNECTION || process.env.SSH_TTY || process.env.SSH_CLIENT) {
 		return "this is an SSH session, so the browser would open on the wrong machine";
 	}
 	if (process.platform !== "darwin" && process.platform !== "win32") {
