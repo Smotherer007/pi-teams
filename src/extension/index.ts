@@ -173,12 +173,19 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	/**
-	 * Start the watcher for the session's account, if the config asks for it.
+	 * Start the watcher for the session's account — but only when it was asked for.
+	 *
+	 * `explicit` is the whole safety property. Switching listen mode on is a
+	 * decision, so only the two places the user makes it — `/teams-listen on` and
+	 * `teams_watch action: enable` — pass `explicit: true`. Everything else may
+	 * only stop the loop. Without that split, "re-read the config" would be a way
+	 * for a stored setting to switch itself back on, which is precisely how a
+	 * listener nobody started turns up, polling and answering in your name.
 	 *
 	 * Restarting is the same call: the old loop is stopped first, so a config
 	 * change cannot leave two pollers running.
 	 */
-	const startWatch = (ctx: any) => {
+	const startWatch = (ctx: any, options: { explicit?: boolean } = {}) => {
 		const conn = refresh();
 
 		// Already watching this exact configuration: leave the loop alone, so its
@@ -189,6 +196,7 @@ export default function (pi: ExtensionAPI) {
 		stopWatch();
 
 		if (!conn?.watch.enabled) return;
+		if (!options.explicit) return;
 
 		reportedWatchError = undefined;
 		const loop = startWatchLoop({
@@ -323,7 +331,7 @@ export default function (pi: ExtensionAPI) {
 				// Written to the account, not globally: the watcher listens as one
 				// identity, and "which account" must not be a guess.
 				const watch = setWatchConfig({ enabled: action === "on" }, conn.account);
-				startWatch(ctx);
+				startWatch(ctx, { explicit: true });
 				paintStatus(ctx);
 				ctx.ui.notify(
 					watch.enabled
@@ -413,8 +421,12 @@ export default function (pi: ExtensionAPI) {
 		const card = buildConnectionCard(connection);
 		if (!card) return;
 
+		// A stored setting is not a decision. A session starts the watcher only when
+		// the configuration opts into it; otherwise listen mode waits until it is
+		// switched on in this session with `/teams-listen on`.
+		if (connection.watch.autoStart) startWatch(ctx, { explicit: true });
+
 		paintStatus(ctx);
-		startWatch(ctx);
 
 		if (!card.signedIn) {
 			ctx.ui.notify(
@@ -422,7 +434,10 @@ export default function (pi: ExtensionAPI) {
 				"warning",
 			);
 		} else {
-			const notice = buildStartupNotice(card, connection.watch);
+			const notice = buildStartupNotice(card, {
+				listening: !!watchLoop?.status().running,
+				intervalSeconds: connection.watch.intervalSeconds,
+			});
 			ctx.ui.notify(notice.message, notice.level);
 		}
 
@@ -539,7 +554,10 @@ export default function (pi: ExtensionAPI) {
 			// errors; leaving it running would be noise, not service.
 			stopWatch();
 		} else if (WATCH_CONFIG_TOOLS.has(event.toolName)) {
-			startWatch(ctx);
+			// Only `enable` is a decision. A status call, or a re-read after
+			// teams_setup, may stop the loop but never start it.
+			const action = (event.input as { action?: string } | undefined)?.action;
+			startWatch(ctx, { explicit: action === "enable" });
 		}
 
 		paintStatus(ctx);

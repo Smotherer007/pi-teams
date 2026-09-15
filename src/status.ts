@@ -93,21 +93,24 @@ export function buildConnectionLabel(card: ConnectionCard | undefined): string {
 /**
  * The line a session starts with.
  *
- * It names listen mode on purpose. The watcher starts from the saved setting, so
- * a session can begin polling — and answering in your name — without the
- * transcript ever saying so, which is how a listener nobody remembers starting
- * turns up, and how it gets to answer before anyone notices.
+ * It names listen mode on purpose. A session can be listening — polling, and
+ * answering in your name — so the transcript should never be silent about it.
  *
  * The level is part of the answer: being listened to is the state worth a louder
  * notice, not the ordinary one of it being off.
  */
 export function buildStartupNotice(
 	card: ConnectionCard,
-	watch: { enabled: boolean; intervalSeconds: number },
+	watch: { listening: boolean; intervalSeconds: number },
 ): { message: string; level: "info" | "warning" } {
 	const identity = `@patimweb/pi-teams loaded (${card.account}${card.user ? ` as ${card.user}` : ""}, safety: ${card.safetyLevel})`;
 
-	if (!watch.enabled) return { message: `${identity} · listen mode off`, level: "info" };
+	// Reported from what is actually running, not from the stored setting: those
+	// two are no longer the same thing, and a notice that reported the file
+	// instead of the loop would be the very confusion it exists to prevent.
+	if (!watch.listening) {
+		return { message: `${identity} · listen mode off — /teams-listen on to start`, level: "info" };
+	}
 
 	return {
 		message: `${identity} · listen mode ON — every ${watch.intervalSeconds} s, /teams-listen off to stop`,

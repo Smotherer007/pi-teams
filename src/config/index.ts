@@ -99,6 +99,14 @@ export interface TenantConfig {
 export interface WatchConfig {
 	/** Whether the watcher runs at all (default: false) */
 	enabled?: boolean;
+	/**
+	 * Whether a pi session may start the watcher by itself (default: false).
+	 *
+	 * Off means listen mode only ever starts when it is switched on in that
+	 * session. A stored setting is not a decision: an agent that answers in your
+	 * name should not begin doing so because a file says it may.
+	 */
+	autoStart?: boolean;
 	/** Seconds between polls (default: 60, minimum: 15) */
 	intervalSeconds?: number;
 	/**
@@ -126,6 +134,7 @@ export interface WatchConfig {
 /** A watch config after every default and clamp has been applied. */
 export interface ResolvedWatchConfig {
 	enabled: boolean;
+	autoStart: boolean;
 	intervalSeconds: number;
 	chats: string[];
 	from: string[];
@@ -309,6 +318,7 @@ const DEFAULTS = {
  */
 export const WATCH_DEFAULTS: ResolvedWatchConfig = {
 	enabled: false,
+	autoStart: false,
 	intervalSeconds: 60,
 	chats: [],
 	from: [],
@@ -721,6 +731,7 @@ export function resolveWatchConfig(
 
 	return {
 		enabled: pick("enabled") ?? WATCH_DEFAULTS.enabled,
+		autoStart: pick("autoStart") ?? WATCH_DEFAULTS.autoStart,
 		intervalSeconds: clamp(pick("intervalSeconds"), WATCH_BOUNDS.intervalSeconds, WATCH_DEFAULTS.intervalSeconds),
 		chats: normalizePatterns(pick("chats")),
 		from: normalizePatterns(pick("from")),

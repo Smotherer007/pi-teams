@@ -51,9 +51,16 @@ into a prompt it answers — as you, in the chat it arrived in.
 /teams-listen off
 ```
 
+Listen mode never starts on its own. It belongs to the session it was switched
+on in and ends with it: quitting pi closes the watcher, and `/new` or `/resume`
+stops it too. A stored `enabled: true` is a setting, not an instruction — set
+`watch.autoStart` if a session is meant to start listening by itself, which is
+only sensible for an unattended one.
+
 ```json
 "watch": {
-  "enabled": true,
+  "enabled": false,
+  "autoStart": false,
   "intervalSeconds": 60,
   "chats": ["Anna*", "Vertrieb*"],
   "from": ["anna.schmidt@contoso.com"],
@@ -65,7 +72,8 @@ into a prompt it answers — as you, in the chat it arrived in.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `enabled` | `false` | whether the watcher runs |
+| `enabled` | `false` | whether listen mode is switched on |
+| `autoStart` | `false` | whether a pi session may start the watcher without being asked |
 | `intervalSeconds` | `60` | seconds between polls (minimum 15) |
 | `chats` | `[]` | **where** pi listens: glob patterns matched against topic, label, chat ID and participant names. Empty means every recent chat. |
 | `from` | `[]` | **who** pi listens to: glob patterns matched against display name, UPN and e-mail. Empty means any sender. |
@@ -603,8 +611,9 @@ teams_send_channel_message:
 
 Both the config and the token cache are written through a private temp file and
 an atomic rename, so an interrupted write cannot truncate them. The watch
-cursor is what makes listen mode survive a restart, and deleting it only costs
-one re-examination of the chats in the list — it is not silently re-answering
+cursor is what keeps listen mode from re-answering what it has already seen, and
+deleting it only costs one re-examination of the chats in the list — it is not
+silently re-answering
 anything, because the decision also asks Teams whether the message is still
 unread. To revoke pi's access entirely, run `teams_logout` with `all: true` and
 remove the app's consent in Entra ID.

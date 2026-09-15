@@ -53,6 +53,7 @@ const CURSOR_NOTES = [
 /** Renders the effective settings the same way the config file would. */
 function describe(watch: {
 	enabled: boolean;
+	autoStart: boolean;
 	intervalSeconds: number;
 	chats: string[];
 	from: string[];
@@ -62,6 +63,7 @@ function describe(watch: {
 }): string {
 	return [
 		`- enabled: ${watch.enabled}`,
+		`- starts with a session: ${watch.autoStart}`,
 		`- poll every: ${watch.intervalSeconds} s`,
 		`- chats: ${watch.chats.length > 0 ? watch.chats.map((c) => `\`${c}\``).join(", ") : "every chat with recent activity"}`,
 		`- people: ${watch.from.length > 0 ? watch.from.map((p) => `\`${p}\``).join(", ") : "any sender"}`,
@@ -82,8 +84,9 @@ function runtimeLines(runtime: WatchRuntimeStatus | undefined, conn: TeamsConnec
 		return [
 			"Nothing is polling in this session.",
 			"",
-			"Listen mode is read when a pi session starts. If the config says `enabled: true` and this "
-				+ "says otherwise, start a new session — or switch it with the `/teams-listen` command.",
+			"Listen mode starts only when it is switched on here — `/teams-listen on`, or "
+				+ "`teams_watch action: enable`. A stored `enabled: true` does not start it by itself: "
+				+ "set `watch.autoStart` if a session is meant to start listening on its own.",
 		];
 	}
 
