@@ -135,7 +135,10 @@ describe("tool shapes", () => {
 			"account",
 			"tenant",
 		]);
-		// No channel path: editing a channel post needs a scope pi does not request.
+		// No channel path on purpose. Graph does allow a delegated caller to PATCH
+		// their own channel message, but only under ChannelMessage.ReadWrite — an
+		// admin-consent scope pi does not request, because editing a channel post
+		// is not worth making every setup wait for an administrator.
 		assert.equal("channel" in teamsUpdateMessageTool.parameters.properties, false);
 	});
 
