@@ -97,6 +97,18 @@ export interface WatchRuntimeStatus {
 // One tick
 // ---------------------------------------------------------------------------
 
+/** A tick was asked to run without knowing who pi is signed in as. */
+export class WatchIdentityError extends Error {
+	constructor(cause?: unknown) {
+		super(
+			"Listen mode is waiting: the signed-in user could not be determined, so pi's own replies " +
+				"could not be told apart from new messages. Retrying on the next poll." +
+				(cause ? ` ${formatGraphError(cause)}` : ""),
+		);
+		this.name = "WatchIdentityError";
+	}
+}
+
 /**
  * Bound on how many chats one tick examines.
  *
@@ -165,8 +177,14 @@ export async function runWatchTick(
 	deps: WatchTickDeps,
 	state: WatchState,
 	watch: ResolvedWatchConfig,
-	me: SignedInUser | undefined,
+	me: SignedInUser,
 ): Promise<WatchTickResult> {
+	// Who pi acts as is what tells its own replies apart from everybody else's
+	// (`isFromMe`). Without it, the answer pi just sent looks like a new message
+	// from a colleague and wakes pi again — a loop that answers itself. So a tick
+	// without an identity examines nothing, and in particular writes no cursor.
+	if (!me) throw new WatchIdentityError();
+
 	const now = deps.now();
 	pruneState(state, now);
 
@@ -337,8 +355,15 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 	 * instead of starting a second one.
 	 */
 	let inFlight: Promise<void> | undefined;
+	/**
+	 * Who pi acts as, looked up on the first tick that can reach Graph.
+	 *
+	 * A failed lookup is not an answer: it is retried on every tick until it
+	 * succeeds, and no tick runs before it has. A watcher started before sign-in
+	 * (autoStart in a fresh container, say) would otherwise settle for "nobody"
+	 * for the whole session and wake on its own replies.
+	 */
 	let me: SignedInUser | undefined;
-	let meResolved = false;
 	let failureCount = 0;
 
 	const status: WatchRuntimeStatus = {
@@ -361,9 +386,12 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 		if (stopped) return;
 
 		try {
-			if (!meResolved) {
-				me = await getMe(connection).catch(() => undefined);
-				meResolved = true;
+			if (!me) {
+				try {
+					me = await getMe(connection);
+				} catch (err) {
+					throw new WatchIdentityError(err);
+				}
 			}
 
 			const result = await runWatchTick(

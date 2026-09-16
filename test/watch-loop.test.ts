@@ -13,7 +13,7 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { runWatchTick, type WatchTickDeps } from "../src/watch/loop.ts";
+import { runWatchTick, WatchIdentityError, type WatchTickDeps } from "../src/watch/loop.ts";
 import {
 	activityMarker,
 	createWatchState,
@@ -231,5 +231,62 @@ describe("runWatchTick", () => {
 		assert.equal(s.state.seen.has("chat-1"), false);
 		await tick(s);
 		assert.equal(s.state.seen.has("chat-1"), true, "the third stops it taking a slot");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+/**
+ * The failure this block exists for: a watcher that started before pi was signed
+ * in (autoStart in a fresh container) resolved "who am I" once, got nothing, and
+ * kept that nothing for the whole session. `isFromMe` is false for everyone when
+ * there is no identity, so pi's own replies woke pi again.
+ */
+describe("runWatchTick without an identity", () => {
+	test("refuses to run, touches no Graph endpoint and writes no cursor", async () => {
+		let calls = 0;
+		let persisted = false;
+		const tickDeps: WatchTickDeps = {
+			listChats: async () => {
+				calls += 1;
+				return [chat({ lastMessageFrom: "Patrick Weppelmann" })];
+			},
+			listMessages: async () => {
+				calls += 1;
+				return [message({ from: { id: "me-1", displayName: "Patrick Weppelmann" } })];
+			},
+			readState: async () => {
+				calls += 1;
+				return undefined;
+			},
+			now: () => NOW,
+			persistCursor: () => {
+				persisted = true;
+			},
+		};
+		const state = createWatchState();
+
+		await assert.rejects(
+			runWatchTick(tickDeps, state, watch({ from: [] }), undefined as unknown as SignedInUser),
+			(err: unknown) => err instanceof WatchIdentityError,
+		);
+		assert.equal(calls, 0);
+		assert.equal(persisted, false);
+		assert.equal(state.seen.size, 0);
+	});
+
+	test("with the identity known, pi's own reply does not wake it", async () => {
+		const own = message({ from: { id: ME.id, displayName: ME.displayName } });
+		const tickDeps: WatchTickDeps = {
+			listChats: async () => [chat({ lastMessageFrom: ME.displayName })],
+			listMessages: async () => [own],
+			readState: async () => undefined,
+			now: () => NOW,
+		};
+
+		const result = await runWatchTick(tickDeps, createWatchState(), watch({ from: [] }), ME);
+		assert.equal(result.wakes.length, 0);
 	});
 });
