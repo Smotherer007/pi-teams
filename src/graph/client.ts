@@ -9,7 +9,7 @@
 
 import type { TeamsConnection } from "../config/index.ts";
 import { getAccessToken } from "../auth/index.ts";
-import { GraphError } from "../utils/errors.ts";
+import { GraphError, UntrustedHostError } from "../utils/errors.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,6 +48,53 @@ interface GraphCollection<T> {
 // ---------------------------------------------------------------------------
 // URL building
 // ---------------------------------------------------------------------------
+
+/**
+ * The one origin the access token may ever be sent to.
+ *
+ * Derived from the configured base URL rather than hardcoded, so sovereign
+ * clouds keep working.
+ */
+export function graphOrigin(conn: TeamsConnection): string {
+	return new URL(conn.graphBaseUrl).origin;
+}
+
+/**
+ * Does this URL point at the tenant's Graph endpoint?
+ *
+ * The question matters because message content is attacker-controlled: anyone
+ * who can send the user a Teams message decides what `contentUrl` says and what
+ * `<img src>` the body carries. Attaching a delegated token to whatever those
+ * strings name would hand that person the user's Teams account for the lifetime
+ * of the token, so every download is checked against this first.
+ *
+ * A relative path is ours by construction and always passes.
+ */
+export function isGraphUrl(conn: TeamsConnection, url: string): boolean {
+	if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) return true;
+	try {
+		return new URL(url).origin === graphOrigin(conn);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Graph's own address for a file that lives in SharePoint or OneDrive.
+ *
+ * A Teams file attachment points straight at the site that stores it, which is
+ * not an origin the token may go to. Graph will fetch it on our behalf when the
+ * URL is encoded as a sharing token, so the request stays on the Graph origin
+ * and the user's own permissions still decide what comes back.
+ */
+export function sharesContentPath(url: string): string {
+	const encoded = Buffer.from(url, "utf-8")
+		.toString("base64")
+		.replace(/=+$/, "")
+		.replace(/\//g, "_")
+		.replace(/\+/g, "-");
+	return `/shares/u!${encoded}/driveItem/content`;
+}
 
 function buildUrl(conn: TeamsConnection, path: string, options: RequestOptions): string {
 	const base = options.beta
@@ -148,6 +195,13 @@ export async function graphDownload(
 	// An absolute URL is allowed here too: Graph answers a hostedContent with a
 	// redirect to a pre-authenticated location, and `fetch` follows it.
 	const url = buildUrl(conn, path, options);
+
+	// The token goes to Graph and nowhere else. `path` can originate in a message
+	// written by someone else, so this is the boundary between "download the
+	// picture a colleague sent" and "hand a stranger my Teams account".
+	if (!isGraphUrl(conn, url)) {
+		throw new UntrustedHostError(url, graphOrigin(conn));
+	}
 
 	let attempt = 0;
 	for (;;) {

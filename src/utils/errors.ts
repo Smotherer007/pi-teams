@@ -23,6 +23,34 @@ export class GraphError extends Error {
 	}
 }
 
+/**
+ * Raised when something asks us to send the access token somewhere it must not go.
+ *
+ * Message content is attacker-controlled — a file attachment's `contentUrl` and
+ * an `<img src>` in the body are both written by whoever sent the message — so a
+ * download URL that is not the tenant's own Graph endpoint is refused rather
+ * than fetched with an `Authorization` header.
+ */
+export class UntrustedHostError extends Error {
+	readonly url: string;
+	readonly expectedOrigin: string;
+	constructor(url: string, expectedOrigin: string) {
+		let host = url;
+		try {
+			host = new URL(url).host;
+		} catch {
+			/* keep the raw string */
+		}
+		super(
+			`Refusing to send your Microsoft Graph token to "${host}". ` +
+				`Only ${expectedOrigin} is trusted with it.`,
+		);
+		this.name = "UntrustedHostError";
+		this.url = url;
+		this.expectedOrigin = expectedOrigin;
+	}
+}
+
 /** Raised when a scope rule blocks an operation. */
 export class ScopeDeniedError extends Error {
 	readonly target: string;
@@ -49,6 +77,7 @@ const CONSENT_HINTS: Record<string, string> = {
 /** Normalize any thrown value into a readable, actionable message. */
 export function formatGraphError(error: unknown): string {
 	if (error instanceof ScopeDeniedError) return error.message;
+	if (error instanceof UntrustedHostError) return error.message;
 
 	if (error instanceof GraphError) {
 		switch (error.code) {
