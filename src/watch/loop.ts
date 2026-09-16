@@ -328,6 +328,15 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 
 	let stopped = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	/**
+	 * The tick currently running, if any.
+	 *
+	 * Every tick schedules the next one when it finishes, so two ticks running at
+	 * once would leave two chains behind and quietly double the polling rate for
+	 * the rest of the session. `poll()` therefore joins the tick in flight
+	 * instead of starting a second one.
+	 */
+	let inFlight: Promise<void> | undefined;
 	let me: SignedInUser | undefined;
 	let meResolved = false;
 	let failureCount = 0;
@@ -343,7 +352,7 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 
 	const schedule = (delayMs: number) => {
 		if (stopped) return;
-		timer = setTimeout(() => void tick(), delayMs);
+		timer = setTimeout(() => void runTick(), delayMs);
 		// Do not hold the process open for a poll that can wait.
 		timer.unref?.();
 	};
@@ -406,14 +415,31 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 			options.onError?.(status.lastError);
 		}
 
-		options.onTick?.(status);
+		// Outside the try above on purpose, and guarded on its own: a throwing
+		// status callback must not become an unhandled rejection that takes the
+		// watcher down without a word.
+		try {
+			options.onTick?.(status);
+		} catch {
+			/* a footer that cannot render is not worth stopping the loop for */
+		}
+
 		schedule(watch.intervalSeconds * 1000 * Math.min(2 ** failureCount, 10));
+	}
+
+	/** Run a tick unless one is already running; either way, resolve with it. */
+	function runTick(): Promise<void> {
+		if (inFlight) return inFlight;
+		inFlight = tick().finally(() => {
+			inFlight = undefined;
+		});
+		return inFlight;
 	}
 
 	// The first tick is immediate: it answers what is still open since the last
 	// run, and a user who switched listen mode on should not wait a full interval
 	// to see it alive.
-	void tick();
+	void runTick();
 
 	return {
 		stop() {
@@ -424,9 +450,15 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 		},
 		status: () => ({ ...status, wakesThisHour: wakesThisHour(state, Date.now()) }),
 		async poll() {
+			// Join a tick already in flight rather than racing it; only start one
+			// when nothing is running.
+			if (inFlight) {
+				await inFlight;
+				return;
+			}
 			if (timer) clearTimeout(timer);
 			timer = undefined;
-			await tick();
+			await runTick();
 		},
 	};
 }
