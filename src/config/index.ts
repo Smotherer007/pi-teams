@@ -218,6 +218,15 @@ export interface TeamsRootConfig {
 	aiFooter?: AiFooterConfig;
 	/** Default page size for message listings (default: 25) */
 	maxMessages?: number;
+	/**
+	 * Where teams_download_files may write.
+	 *
+	 * Downloads default to the agent directory and are otherwise confined to it
+	 * and the working directory, so a path cannot be chosen by whatever a message
+	 * happens to say. Naming a directory here is the user's way of widening that —
+	 * a decision the configuration makes, not the model.
+	 */
+	downloadDir?: string;
 	/** Append every write to ~/.pi/agent/pi-teams-audit.jsonl (default: true) */
 	audit?: boolean;
 	/** Graph base URL override (sovereign clouds) */
@@ -250,6 +259,8 @@ export interface TeamsConnection {
 	/** AI-footer settings in force for this account */
 	aiFooter: ResolvedAiFooter;
 	maxMessages: number;
+	/** Extra directory teams_download_files may write to, when configured */
+	downloadDir?: string;
 	audit: boolean;
 	graphBaseUrl: string;
 	authorityHost: string;
@@ -578,6 +589,7 @@ export function resolveConnection(
 		watch: resolveWatchConfig(config.watch, account),
 		aiFooter: resolveAiFooter(config.aiFooter, account.aiFooter),
 		maxMessages: config.maxMessages ?? DEFAULTS.maxMessages,
+		downloadDir: config.downloadDir?.trim() || undefined,
 		audit: config.audit ?? DEFAULTS.audit,
 		graphBaseUrl: (config.graphBaseUrl ?? DEFAULTS.graphBaseUrl).replace(/\/+$/, ""),
 		authorityHost: (config.authorityHost ?? DEFAULTS.authorityHost).replace(/\/+$/, ""),

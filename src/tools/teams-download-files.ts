@@ -7,7 +7,8 @@
  * returns the paths, so a reader can open them.
  */
 
-import { join } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { Type } from "typebox";
 import { getAgentDir } from "../config/index.ts";
 import { saveMessageFiles, type SavedFile, type SkippedFile } from "../graph/media.ts";
@@ -47,7 +48,13 @@ export const teamsDownloadFilesTool = {
 		limit: Type.Optional(
 			Type.Number({ description: "How many recent messages to scan (default 10, max 50)" }),
 		),
-		dir: Type.Optional(Type.String({ description: "Directory to save into (default: pi-teams-files)" })),
+		dir: Type.Optional(
+			Type.String({
+				description:
+					"Directory to save into. Must be inside the working directory, the pi agent directory, or the " +
+					"configured downloadDir. Defaults to the agent directory.",
+			}),
+		),
 		account: AccountParam,
 		tenant: TenantParam,
 	}),
@@ -106,7 +113,7 @@ export const teamsDownloadFilesTool = {
 					: await listChannelMessages(conn, channel, { max: scanLimit, signal });
 			}
 
-			const dir = params.dir ?? join(getAgentDir(), "pi-teams-files", slug);
+			const dir = resolveDownloadDir(params.dir, join(getAgentDir(), "pi-teams-files", slug), conn.downloadDir);
 
 			const saved: SavedFile[] = [];
 			const skipped: SkippedFile[] = [];
@@ -142,4 +149,41 @@ export const teamsDownloadFilesTool = {
 async function one(message: MessageSummary | undefined, messageId: string): Promise<MessageSummary[]> {
 	if (!message) throw new TargetError(`No message ${messageId} in this conversation.`);
 	return [message];
+}
+
+/**
+ * Where the download may land.
+ *
+ * The directory is a tool parameter, so it is chosen by the model — and the
+ * model is reading messages other people wrote. Confining it keeps a download
+ * from landing in `~/.ssh` or a shell profile: the working directory and the
+ * agent directory are always allowed, and a user who wants somewhere else says
+ * so once in the configuration rather than per call.
+ *
+ * `~` is expanded first, because a path that silently means a literal `./~`
+ * would be its own small surprise.
+ */
+export function resolveDownloadDir(
+	requested: string | undefined,
+	fallback: string,
+	configured: string | undefined,
+): string {
+	if (!requested) return configured ? resolve(expandHome(configured)) : fallback;
+
+	const target = resolve(expandHome(requested));
+	const roots = [resolve(process.cwd()), resolve(getAgentDir())];
+	if (configured) roots.push(resolve(expandHome(configured)));
+
+	if (roots.some((root) => target === root || target.startsWith(root + sep))) return target;
+
+	throw new TargetError(
+		`Refusing to write downloads to "${target}". Allowed: ${roots.join(", ")}. ` +
+			`Set "downloadDir" in pi-teams.json to allow another location.`,
+	);
+}
+
+function expandHome(value: string): string {
+	if (value === "~") return homedir();
+	if (value.startsWith("~/") || value.startsWith("~\\")) return join(homedir(), value.slice(2));
+	return isAbsolute(value) ? value : value;
 }
