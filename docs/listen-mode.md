@@ -15,8 +15,11 @@ understanding before switching on.
 Listen mode never starts on its own. It belongs to the session it was switched
 on in and ends with it: quitting pi closes the watcher, and `/new` or `/resume`
 stops it too. A stored `enabled: true` is a setting, not an instruction — set
-`autoStart` if a session is meant to start listening by itself, which is only
-sensible for an unattended one.
+`autoStart` if a session is meant to start listening by itself. Only a session
+with a UI does: a pi started headless by another pi loads the same extensions
+and the same configuration, and a watcher there would answer chats inside a
+throwaway process and move the shared cursor past messages the real session
+never sees.
 
 ## Settings
 
@@ -36,7 +39,7 @@ sensible for an unattended one.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `false` | whether listen mode is switched on |
-| `autoStart` | `false` | whether a pi session may start the watcher without being asked |
+| `autoStart` | `false` | whether a session with a UI may start the watcher without being asked |
 | `intervalSeconds` | `60` | seconds between polls (minimum 15) |
 | `chats` | `[]` | **where** pi listens: glob patterns matched against topic, label, chat ID and participant names. Empty means every recent chat. |
 | `from` | `[]` | **who** pi listens to: glob patterns matched against display name, UPN and e-mail. Empty means any sender. |

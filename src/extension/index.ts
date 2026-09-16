@@ -429,7 +429,12 @@ export default function (pi: ExtensionAPI) {
 		// A stored setting is not a decision. A session starts the watcher only when
 		// the configuration opts into it; otherwise listen mode waits until it is
 		// switched on in this session with `/teams-listen on`.
-		if (connection.watch.autoStart) startWatch(ctx, { explicit: true });
+		// Only an interactive session listens on its own. A pi started headless by
+		// another pi (`--mode json -p`, e.g. a subagent) loads the same extensions
+		// and the same config: autoStart there would run a second watcher that
+		// answers chats inside a throwaway process and advances the shared cursor,
+		// so the real session never sees those messages.
+		if (connection.watch.autoStart && ctx.hasUI) startWatch(ctx, { explicit: true });
 
 		paintStatus(ctx);
 
