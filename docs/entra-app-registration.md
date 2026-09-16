@@ -175,8 +175,22 @@ require it:
 
 Without an administrator, drop those two scopes from the configuration and
 everything else still works: chats in full, posting and replying in channels,
-presence, calendar, meetings, directory lookup. See the README, *Who has to
-approve what*, for the reduced scope list.
+presence, calendar, meetings, directory lookup. Set `scopes` on the account to
+the reduced list:
+
+```json
+"scopes": [
+  "User.Read", "User.ReadBasic.All",
+  "Team.ReadBasic.All", "Channel.ReadBasic.All", "ChannelMessage.Send",
+  "Chat.ReadWrite", "ChatMessage.Send",
+  "Presence.ReadWrite", "Presence.Read.All",
+  "Calendars.ReadWrite", "OnlineMeetings.ReadWrite",
+  "Files.Read.All", "Sites.Read.All"
+]
+```
+
+Posting in a channel needs no administrator; *reading* one does. Microsoft
+treats bulk reading of channel content as the more sensitive right.
 
 If the tenant has *Users can consent to applications* switched off, even the
 user-consentable scopes need an administrator — usually through the admin
