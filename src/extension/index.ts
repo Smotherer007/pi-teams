@@ -36,6 +36,7 @@ import {
 	type WatchLoop,
 } from "../watch/loop.ts";
 import { composeWatchPrompt } from "../watch/prompt.ts";
+import { clearWakeTarget, pinViolation, pinWakeTarget } from "../watch/pin.ts";
 import { readWatchCursor, writeWatchCursor } from "../watch/cursor.ts";
 
 import { teamsSetupTool } from "../tools/teams-setup.ts";
@@ -206,6 +207,10 @@ export default function (pi: ExtensionAPI) {
 			cursor: readWatchCursor(conn.account, conn.tenantId),
 			persistCursor: (seen) => writeWatchCursor(conn.account, conn.tenantId, seen),
 			onWake: (event) => {
+				// Pin before the prompt is delivered: the turn it starts may only
+				// answer the chat that woke pi, and the message it is about to read
+				// was written by somebody else.
+				pinWakeTarget(event.chat.id, event.chat.label);
 				pi.sendUserMessage(composeWatchPrompt(event, event.me), { deliverAs: "followUp" });
 			},
 			onTick: (status) => {
@@ -489,12 +494,23 @@ export default function (pi: ExtensionAPI) {
 	// Safety interceptor
 	// -----------------------------------------------------------------------
 
+	// The agent has finished the turn a wake started, so the answer is no longer
+	// owed and the pin must not outlive it.
+	pi.on("agent_end", async () => {
+		clearWakeTarget();
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		if (!isMutationTool(event.toolName)) return;
 
 		// A tool may target a different account than the session default, so the
 		// rules are resolved against the connection that will actually be used.
 		const params = (event.input ?? {}) as Record<string, unknown>;
+
+		// Listen mode first: while an answer is pinned to one chat, no message may
+		// go anywhere else, whatever the incoming message asked for.
+		const offTarget = pinViolation(event.toolName, params);
+		if (offTarget) return { block: true, reason: offTarget };
 		const target =
 			tryResolveConnection(
 				typeof params.account === "string" ? params.account : undefined,
