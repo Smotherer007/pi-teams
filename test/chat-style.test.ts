@@ -150,14 +150,14 @@ describe("chat shape — the renderer has to keep it", () => {
 	test("renders the documented before/after shape as Teams HTML", () => {
 		assert.equal(
 			markdownToTeamsHtml("QA läuft wieder.\n\n- Ursache: abgelaufenes Zertifikat\n- Fix: neu deployt"),
-			"<p>QA läuft wieder.</p><ul><li>Ursache: abgelaufenes Zertifikat</li><li>Fix: neu deployt</li></ul>",
+			"<p>QA läuft wieder.</p><p>&nbsp;</p><ul><li>Ursache: abgelaufenes Zertifikat</li><li>Fix: neu deployt</li></ul>",
 		);
 	});
 
 	test("a bold line and a link survive, a heading arrives as a bold line", () => {
 		assert.equal(
 			markdownToTeamsHtml("# Deployment\n\n**Fertig.** Release Notes: [Wiki](https://example.com/w)"),
-			'<p><b>Deployment</b></p><p><b>Fertig.</b> Release Notes: <a href="https://example.com/w">Wiki</a></p>',
+			'<p><b>Deployment</b></p><p>&nbsp;</p><p><b>Fertig.</b> Release Notes: <a href="https://example.com/w">Wiki</a></p>',
 		);
 	});
 

@@ -63,6 +63,11 @@ const HEADING = /^\s{0,3}#{1,6}\s+(.*)$/;
  * Blank lines separate paragraphs, single newlines become `<br>` inside one —
  * which is what a person typing into the chat box gets, and the safest
  * assumption for text that was generated, not composed.
+ *
+ * Teams renders `<p>` (and lists) in a chat bubble with no margin at all, so
+ * `<p>a</p><p>b</p>` looks exactly like `a<br>b` — every blank line the model
+ * wrote disappears and a digest arrives as one block. The Teams client itself
+ * writes an empty paragraph for a blank line, so blocks are joined with one.
  */
 export function markdownToTeamsHtml(text: string): string {
 	const lines = text.replace(/\r\n?/g, "\n").split("\n");
@@ -146,5 +151,8 @@ export function markdownToTeamsHtml(text: string): string {
 	if (code) blocks.push(`<pre>${escapeHtml(code.join("\n"))}</pre>`);
 	flushBlock();
 
-	return blocks.join("");
+	return blocks.join(BLOCK_SPACER);
 }
+
+/** What the Teams client writes for an empty line between two blocks. */
+export const BLOCK_SPACER = "<p>&nbsp;</p>";

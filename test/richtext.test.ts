@@ -13,7 +13,7 @@ import { htmlToText } from "../src/utils/formatting.ts";
 
 describe("markdownToTeamsHtml — paragraphs", () => {
 	test("keeps a blank line as a paragraph break and a single newline as a <br>", () => {
-		assert.equal(markdownToTeamsHtml("one\n\ntwo"), "<p>one</p><p>two</p>");
+		assert.equal(markdownToTeamsHtml("one\n\ntwo"), "<p>one</p><p>&nbsp;</p><p>two</p>");
 		assert.equal(markdownToTeamsHtml("one\ntwo"), "<p>one<br>two</p>");
 	});
 
@@ -23,7 +23,7 @@ describe("markdownToTeamsHtml — paragraphs", () => {
 	});
 
 	test("drops runs of blank lines instead of emitting empty paragraphs", () => {
-		assert.equal(markdownToTeamsHtml("a\n\n\n\nb"), "<p>a</p><p>b</p>");
+		assert.equal(markdownToTeamsHtml("a\n\n\n\nb"), "<p>a</p><p>&nbsp;</p><p>b</p>");
 	});
 });
 
@@ -83,7 +83,7 @@ describe("markdownToTeamsHtml — blocks", () => {
 	test("switching between list kinds starts a new list", () => {
 		assert.equal(
 			markdownToTeamsHtml("- eins\n1. zwei"),
-			"<ul><li>eins</li></ul><ol><li>zwei</li></ol>",
+			"<ul><li>eins</li></ul><p>&nbsp;</p><ol><li>zwei</li></ol>",
 		);
 	});
 
@@ -108,18 +108,17 @@ describe("markdownToTeamsHtml — blocks", () => {
 		);
 		assert.equal(
 			html,
-			"<p>Deployment ist durch.</p><ul><li>DEV: grün</li><li>QA: grün</li></ul>" +
-				"<p>Nächster Schritt: <b>Freigabe</b> von @Anna Schmidt.</p>",
+			"<p>Deployment ist durch.</p><p>&nbsp;</p><ul><li>DEV: grün</li><li>QA: grün</li></ul>" +
+				"<p>&nbsp;</p><p>Nächster Schritt: <b>Freigabe</b> von @Anna Schmidt.</p>",
 		);
 	});
 
 	test("round-trips through htmlToText back to readable text", () => {
-		// The reader gets every line back in order. A blank line before a list is a
-		// paragraph break we put in and htmlToText does not re-invent — the text is
-		// unchanged, only that one empty line disappears.
+		// The reader gets every line back in order — and, since blocks are now
+		// separated by the empty paragraph Teams needs, the blank line too.
 		const original = "Lage\n\n- DEV grün\n- QA rot";
 		const text = htmlToText(markdownToTeamsHtml(original));
-		assert.equal(text, "Lage\n- DEV grün\n- QA rot");
+		assert.equal(text, original);
 	});
 });
 
@@ -130,13 +129,27 @@ describe("markdownToTeamsHtml — edges", () => {
 	});
 
 	test("normalises CRLF", () => {
-		assert.equal(markdownToTeamsHtml("a\r\n\r\nb"), "<p>a</p><p>b</p>");
+		assert.equal(markdownToTeamsHtml("a\r\n\r\nb"), "<p>a</p><p>&nbsp;</p><p>b</p>");
 	});
 
 	test("a list directly after a paragraph is not swallowed by it", () => {
 		assert.equal(
 			markdownToTeamsHtml("Ergebnis:\n- eins"),
-			"<p>Ergebnis:</p><ul><li>eins</li></ul>",
+			"<p>Ergebnis:</p><p>&nbsp;</p><ul><li>eins</li></ul>",
 		);
+	});
+});
+
+describe("markdownToTeamsHtml — blank lines survive in Teams", () => {
+	test("paragraphs and lists are separated by an empty paragraph, as the Teams client writes it", () => {
+		assert.equal(
+			markdownToTeamsHtml("Vorschau:\n\n- **KI:** eins\n- **SAP:** zwei\n\nZeitraum 15.–21.09."),
+			"<p>Vorschau:</p><p>&nbsp;</p><ul><li><b>KI:</b> eins</li><li><b>SAP:</b> zwei</li></ul>" +
+				"<p>&nbsp;</p><p>Zeitraum 15.–21.09.</p>",
+		);
+	});
+
+	test("a single paragraph gets no spacer", () => {
+		assert.equal(markdownToTeamsHtml("nur eins"), "<p>nur eins</p>");
 	});
 });

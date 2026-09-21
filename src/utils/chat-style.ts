@@ -37,7 +37,9 @@ export const CHAT_MESSAGE_BODY_DESCRIPTION =
 	"Message text as lightweight markdown, in chat shape: the answer on the first line, then at most 5 short " +
 	"lines, `- ` bullets for anything enumerable, one idea per line. No greeting, no closing, no summary. " +
 	"Rendered: **bold**, *italic*, `code`, ~~struck~~, [label](url), `- ` bullets, `1. ` numbered, ``` fences. " +
-	"A `#` heading arrives as a bold line; tables are not rendered at all.";
+	"A `#` heading arrives as a bold line; tables are not rendered at all. Longer posts the user asked for " +
+	"(digest, summary, list of news): an intro line, a blank line, then one `- ` bullet per item, a blank line " +
+	"before any closing note.";
 
 /**
  * The same shape as one guideline bullet.
@@ -50,7 +52,8 @@ export const CHAT_MESSAGE_BODY_DESCRIPTION =
 export const CHAT_SHAPE_GUIDELINE =
 	"teams_send_chat_message, teams_send_channel_message, teams_reply_channel_message and teams_update_message " +
 	"write chat shape, not a document: the answer on the first line, at most 5 short lines, `- ` bullets for " +
-	"enumerable items, no greeting, no closing summary, no tables.";
+	"enumerable items, no greeting, no closing summary, no tables; a longer post (digest) is one `- ` bullet per " +
+	"item with blank lines between intro, list and closing note.";
 
 /**
  * The shape as prose, for the listen-mode prompt.
