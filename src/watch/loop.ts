@@ -25,6 +25,7 @@ import { getMe } from "../graph/me.ts";
 import { chatCandidates } from "../graph/mappers.ts";
 import { hasAccess } from "../safety/index.ts";
 import { formatGraphError } from "../utils/errors.ts";
+import { presenceKeeperFor, type PresenceKeeper } from "./presence-keeper.ts";
 import {
 	activityMarker,
 	chatsToExamine,
@@ -298,6 +299,11 @@ export interface WatchLoopOptions {
 	onError?: (message: string) => void;
 	/** Called after every tick, for the footer */
 	onTick?: (status: WatchRuntimeStatus) => void;
+	/**
+	 * Holds the user's Teams presence online while the watcher runs.
+	 * Defaults to a Graph-backed keeper; pass `null` to leave presence alone.
+	 */
+	presence?: PresenceKeeper | null;
 }
 
 export interface WatchLoop {
@@ -365,6 +371,10 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 	 */
 	let me: SignedInUser | undefined;
 	let failureCount = 0;
+	const presence =
+		options.presence === undefined
+			? presenceKeeperFor(connection, options.onError)
+			: options.presence ?? undefined;
 
 	const status: WatchRuntimeStatus = {
 		running: true,
@@ -393,6 +403,9 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 					throw new WatchIdentityError(err);
 				}
 			}
+			// Teams shows Offline without a presence session; pi holds one while
+			// it listens (see ./presence-keeper.ts).
+			if (me.id && !stopped) presence?.start(me.id);
 
 			const result = await runWatchTick(
 				{
@@ -475,6 +488,7 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 			status.running = false;
 			if (timer) clearTimeout(timer);
 			timer = undefined;
+			void presence?.stop();
 		},
 		status: () => ({ ...status, wakesThisHour: wakesThisHour(state, Date.now()) }),
 		async poll() {

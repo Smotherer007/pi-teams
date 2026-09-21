@@ -173,3 +173,16 @@ Polling works anywhere.
 whether listen mode is enabled and actually running, how many chats it tracks,
 how many are waiting out a cooldown, when the last poll was, and what the last
 error said. See [troubleshooting.md](troubleshooting.md) for the specific cases.
+
+## Presence while listening
+
+Teams shows a user as **Offline** unless at least one presence session exists
+for them — a running Teams client is one, pi calling Graph is not. Even a
+status set with `teams_set_presence` stays invisible without a session.
+
+While listen mode runs, pi therefore holds its own application presence
+session (`setPresence`, session ID = the app's client ID, `Presence.ReadWrite`)
+and renews it every 5 minutes for 15 minutes at a time. You show as
+**Available**, or as whatever you picked with `teams_set_presence`. When the
+watcher stops, pi clears the session and you drop back to Offline straight away
+(at the latest 15 minutes after pi was killed).

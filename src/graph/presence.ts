@@ -1,10 +1,14 @@
 /**
  * Presence — reading who is available and setting the user's own status.
  *
- * Setting presence uses `setUserPreferredPresence`, not `setPresence`: the
- * latter is tied to an application session and gets overwritten by the Teams
- * client within seconds. Preferred presence is what the user themselves sets
- * in the app, so it behaves the way they expect — including the expiry.
+ * What the user picks (`teams_set_presence`) is the *preferred* presence
+ * (`setUserPreferredPresence`) — the same thing as choosing a status in the
+ * Teams app, including the expiry.
+ *
+ * Preferred presence only shows while at least one presence *session* exists
+ * for the user; without one, Teams shows Offline no matter what was picked.
+ * pi opens its own application session (`setPresence`, sessionId = client ID)
+ * while listen mode runs — see ../watch/presence-keeper.ts.
  */
 
 import type { TeamsConnection } from "../config/index.ts";
@@ -112,6 +116,44 @@ export async function setPreferredPresence(
 	if (options.expirationDuration) body.expirationDuration = options.expirationDuration;
 
 	await graphPost(conn, "/me/presence/setUserPreferredPresence", body, { signal: options.signal });
+}
+
+/**
+ * Create or refresh pi's own application presence session for a user.
+ *
+ * `sessionId` must be the app's client ID. The session lasts
+ * `expirationDuration` (PT5M … PT4H) and has to be renewed to stay alive.
+ * Uses `/users/{id}` so it works for delegated and app-only tokens alike.
+ */
+export async function setSessionPresence(
+	conn: TeamsConnection,
+	userId: string,
+	availability: "Available" | "Busy" | "Away",
+	options: { expirationDuration?: string; signal?: AbortSignal } = {},
+): Promise<void> {
+	const body: Record<string, unknown> = {
+		sessionId: conn.clientId,
+		availability,
+		activity: availability,
+	};
+	if (options.expirationDuration) body.expirationDuration = options.expirationDuration;
+	await graphPost(conn, `/users/${encodeURIComponent(userId)}/presence/setPresence`, body, {
+		signal: options.signal,
+	});
+}
+
+/** End pi's application presence session right away. */
+export async function clearSessionPresence(
+	conn: TeamsConnection,
+	userId: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	await graphPost(
+		conn,
+		`/users/${encodeURIComponent(userId)}/presence/clearPresence`,
+		{ sessionId: conn.clientId },
+		{ signal },
+	);
 }
 
 /** Hand presence back to Teams' automatic calculation. */
