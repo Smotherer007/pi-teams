@@ -365,13 +365,21 @@ teams_watch:
   action: enable
   chats: ["Anna*", "Vertrieb*"]     # where to listen
   from: ["anna.schmidt@contoso.com"] # who to listen to
-  mentionOnly: false
+  mentionOnly:
+    default: true
+    people: {"anna.schmidt@contoso.com": false}
   intervalSeconds: 60
 ```
 
 - `chats` decides **where** pi listens (topic, label, chat ID, participants),
   `from` decides **to whom** (name, UPN, e-mail). Narrow both: a watcher that
   watches everything answers everything.
+- `mentionOnly` decides whether a message has to address the user at all: a
+  boolean for everywhere, or `{ default, chats, people }` for overrides, matched
+  first-pattern-wins. A message in a **1:1 chat** counts as an address, so the
+  overrides are about group and meeting chats — the usual shape is a global
+  `true` with one person set to `false`, so that person never has to mention the
+  user.
 - `/teams-listen on|off|status` switches it in the session; `teams_watch
   action: status` reports what is configured and what is actually running.
 - pi answers what is still **unread**: a chat wakes it when it has moved since

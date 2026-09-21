@@ -30,7 +30,11 @@ never sees.
   "intervalSeconds": 60,
   "chats": ["Anna*", "Vertrieb*"],
   "from": ["anna.schmidt@contoso.com"],
-  "mentionOnly": false,
+  "mentionOnly": {
+    "default": true,
+    "chats": { "*Holodeck*": true },
+    "people": { "anna.schmidt@contoso.com": false }
+  },
   "cooldownSeconds": 300,
   "maxTriggersPerHour": 10
 }
@@ -43,13 +47,58 @@ never sees.
 | `intervalSeconds` | `60` | seconds between polls (minimum 15) |
 | `chats` | `[]` | **where** pi listens: glob patterns matched against topic, label, chat ID and participant names. Empty means every recent chat. |
 | `from` | `[]` | **who** pi listens to: glob patterns matched against display name, UPN and e-mail. Empty means any sender. |
-| `mentionOnly` | `false` | only wake where you are mentioned |
+| `mentionOnly` | `false` | whether a message has to address you: `true`/`false`, or `{ default, chats, people }` for overrides. See [below](#who-has-to-address-pi). |
 | `cooldownSeconds` | `300` | stay quiet in a chat after waking pi for it |
 | `maxTriggersPerHour` | `10` | hard cap on wakes per hour |
 
 Set it globally, or per account — the account level wins field by field.
 `teams_watch` writes the same keys; `/teams-listen` writes to the session's
 account.
+
+### Who has to address pi
+
+`mentionOnly` answers one question: does a message have to name you before it
+may wake pi? It is easy to get wrong in both directions — too strict and pi goes
+silent in chats that wanted an answer, too loose and it answers conversations it
+was never part of.
+
+A message counts as an address when it **@-mentions you** (or names you in the
+text: `Patrick, kannst du…`), or when it arrives in a **1:1 chat**. A chat with
+one other person is addressed to you by definition — there is nobody else it
+could be meant for — so demanding a mention there would only buy silence. Group
+and meeting chats have no such shortcut.
+
+The switch takes a boolean for "everywhere", or an object when one answer is not
+enough:
+
+```json
+"mentionOnly": {
+  "default": true,
+  "chats": { "*Holodeck*": true, "chat-1": false },
+  "people": { "anna.schmidt@contoso.com": false, "bernd@contoso.com": true }
+}
+```
+
+Rules are matched like the scope rules — chats against topic, label, chat ID and
+participants, people against display name, UPN, e-mail and id — and the **first**
+matching pattern wins, so put the specific rule above the general one. Both
+values are settable, which is what makes the switch usable: a global `true` with
+one person set to `false` means everyone has to address you except that person.
+
+The order, most specific first:
+
+1. a `chats` rule for this conversation,
+2. the 1:1 exemption,
+3. a `people` rule for the sender,
+4. `default`.
+
+The 1:1 exemption sits **above** the people rules deliberately: it is about the
+conversation rather than about somebody in it, so a rule meant for group chats
+cannot silence the direct messages that need no ceremony. To require a mention
+in a 1:1, name that chat in `chats`.
+
+An account that sets `mentionOnly` replaces the whole switch, exactly as it
+does for `chats` and `from` — the object does not merge with the global one.
 
 ## How a wake is decided
 

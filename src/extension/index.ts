@@ -13,6 +13,7 @@ import {
 	ensureConfigTemplate,
 	getConfigPath,
 	setWatchConfig,
+	type ResolvedMentionOnly,
 	tryResolveConnection,
 	type TeamsConnection,
 } from "../config/index.ts";
@@ -85,6 +86,19 @@ import {
 } from "../tools/teams-meetings.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * The mention-only switch in one phrase, for the status line.
+ *
+ * The override count is part of it on purpose: "mentions only" and "mentions
+ * only, with two exemptions" behave differently enough that the difference
+ * should not be invisible in the place people check the setting.
+ */
+function mentionSummary(mentionOnly: ResolvedMentionOnly): string {
+	const overrides = mentionOnly.chats.length + mentionOnly.people.length;
+	const base = mentionOnly.default ? "mentions only" : "every message";
+	return overrides > 0 ? `${base} (${overrides} override${overrides === 1 ? "" : "s"})` : base;
+}
 
 /** Every tool, in the order they appear in the documentation. */
 const tools = [
@@ -360,7 +374,7 @@ export default function (pi: ExtensionAPI) {
 					`every ${conn.watch.intervalSeconds} s`,
 					conn.watch.chats.length > 0 ? `chats: ${conn.watch.chats.join(", ")}` : "all recent chats",
 					conn.watch.from.length > 0 ? `people: ${conn.watch.from.join(", ")}` : "any sender",
-					conn.watch.mentionOnly ? "mentions only" : "every message",
+					mentionSummary(conn.watch.mentionOnly),
 					runtime ? `${runtime.wakesThisHour} wake(s) this hour` : "not running in this session",
 				].join(" · "),
 				"info",

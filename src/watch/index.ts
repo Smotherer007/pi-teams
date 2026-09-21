@@ -18,7 +18,7 @@
  */
 
 import type { ChatSummary, MessageSummary, PersonRef, SignedInUser } from "../types.ts";
-import type { ResolvedWatchConfig } from "../config/index.ts";
+import type { MentionOnlyRule, ResolvedWatchConfig } from "../config/index.ts";
 import { matchesPattern } from "../config/scope.ts";
 import { chatCandidates } from "../graph/mappers.ts";
 
@@ -257,6 +257,85 @@ export function isWatchedSender(message: MessageSummary, watch: ResolvedWatchCon
 }
 
 // ---------------------------------------------------------------------------
+// Whether a message has to address pi at all
+// ---------------------------------------------------------------------------
+
+/**
+ * Does this message have to mention the user before it may wake pi?
+ *
+ * The ladder, most specific first:
+ *
+ * 1. an explicit chat rule — a statement about this one conversation;
+ * 2. a one-to-one chat — a direct message is an address by definition;
+ * 3. an explicit person rule;
+ * 4. the configured default.
+ *
+ * Either value can be set at every step, so a global `true` with one person set
+ * to `false` means that person does not have to mention the user first. A 1:1
+ * chat sits above the person rules deliberately: it is about the conversation
+ * rather than about somebody in it, and a rule meant for group chats must not
+ * silence the direct messages that need no ceremony. To require a mention even
+ * there, name the chat.
+ */
+export function mentionRequired(
+	chat: ChatSummary,
+	message: MessageSummary,
+	me: SignedInUser | undefined,
+	watch: ResolvedWatchConfig,
+): boolean {
+	const chatRule = firstMentionRule(
+		watch.mentionOnly.chats,
+		chatCandidates(chat).filter((value): value is string => !!value),
+	);
+	if (chatRule !== undefined) return chatRule;
+
+	if (isDirectChat(chat, me)) return false;
+
+	const sender = message.from;
+	const candidates = sender
+		? [sender.displayName, sender.upn, sender.mail, sender.id].filter(
+				(value): value is string => !!value,
+			)
+		: [];
+
+	return firstMentionRule(watch.mentionOnly.people, candidates) ?? watch.mentionOnly.default;
+}
+
+/**
+ * Is this conversation a one-to-one?
+ *
+ * A message in a chat with a single other person *is* a direct address: there
+ * is nobody else it could be meant for, and Teams 1:1 messages carry no
+ * @-mention. Counting them as "not addressed" would silence exactly the
+ * conversations that need no ceremony.
+ *
+ * `chatType` is authoritative when Graph sends one. It can come back as
+ * "unknown" — the mapper's fallback — and then the member list is the only
+ * evidence, so the people other than the signed-in user are counted. Whether
+ * the signed-in user appears in that list is up to Graph, which is why the
+ * comparison runs per member rather than a plain length check.
+ */
+export function isDirectChat(chat: ChatSummary, me: SignedInUser | undefined): boolean {
+	if (chat.chatType === "oneOnOne") return true;
+	if (chat.chatType && chat.chatType !== "unknown") return false;
+
+	return chat.members.filter((member) => !isFromMe(member, me)).length === 1;
+}
+
+/** The value of the first rule that matches any candidate, in config order. */
+function firstMentionRule(
+	rules: readonly MentionOnlyRule[],
+	candidates: readonly string[],
+): boolean | undefined {
+	for (const rule of rules) {
+		for (const candidate of candidates) {
+			if (matchesPattern(rule.pattern, candidate)) return rule.value;
+		}
+	}
+	return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // What the answer has to cover
 // ---------------------------------------------------------------------------
 
@@ -388,7 +467,9 @@ export function shouldWake(
 
 	if (!isWatchedChat(chat, watch)) return skip("the chat is outside the configured watch list");
 	if (!isWatchedSender(message, watch)) return skip("the sender is outside the configured listen list");
-	if (watch.mentionOnly && !mentionsMe(message, me)) return skip("the chat is set to mentions only");
+	if (mentionRequired(chat, message, me, watch) && !mentionsMe(message, me)) {
+		return skip("a mention is required here and the message has none");
+	}
 	if (watch.maxTriggersPerHour > 0 && wakesThisHour(state, now) >= watch.maxTriggersPerHour) {
 		return defer(
 			"the hourly wake limit is reached",

@@ -12,6 +12,8 @@ import {
 	getConfigPath,
 	resolveConnection,
 	setWatchConfig,
+	type MentionOnlyConfig,
+	type ResolvedMentionOnly,
 	type TeamsConnection,
 	type WatchConfig,
 } from "../config/index.ts";
@@ -26,7 +28,7 @@ interface WatchParams {
 	intervalSeconds?: number;
 	chats?: string[];
 	from?: string[];
-	mentionOnly?: boolean;
+	mentionOnly?: boolean | MentionOnlyConfig;
 	cooldownSeconds?: number;
 	maxTriggersPerHour?: number;
 }
@@ -50,6 +52,16 @@ const CURSOR_NOTES = [
 		+ "never dropped: it stays open and is answered as soon as the wait is over.",
 ].join("\n");
 
+/** Renders the mention-only switch, which is a default plus optional overrides. */
+function describeMentionOnly(mentionOnly: ResolvedMentionOnly): string {
+	const rules = [
+		...mentionOnly.chats.map((rule) => `chat \`${rule.pattern}\` → ${rule.value}`),
+		...mentionOnly.people.map((rule) => `person \`${rule.pattern}\` → ${rule.value}`),
+	];
+	const overrides = rules.length > 0 ? ` (${rules.join(", ")})` : "";
+	return `- mentions only: ${mentionOnly.default}${overrides}`;
+}
+
 /** Renders the effective settings the same way the config file would. */
 function describe(watch: {
 	enabled: boolean;
@@ -57,7 +69,7 @@ function describe(watch: {
 	intervalSeconds: number;
 	chats: string[];
 	from: string[];
-	mentionOnly: boolean;
+	mentionOnly: ResolvedMentionOnly;
 	cooldownSeconds: number;
 	maxTriggersPerHour: number;
 }): string {
@@ -67,7 +79,7 @@ function describe(watch: {
 		`- poll every: ${watch.intervalSeconds} s`,
 		`- chats: ${watch.chats.length > 0 ? watch.chats.map((c) => `\`${c}\``).join(", ") : "every chat with recent activity"}`,
 		`- people: ${watch.from.length > 0 ? watch.from.map((p) => `\`${p}\``).join(", ") : "any sender"}`,
-		`- mentions only: ${watch.mentionOnly}`,
+		describeMentionOnly(watch.mentionOnly),
 		`- cooldown per chat: ${watch.cooldownSeconds} s`,
 		`- wake limit: ${watch.maxTriggersPerHour} per hour`,
 	].join("\n");
@@ -159,7 +171,23 @@ export const teamsWatchTool = {
 			}),
 		),
 		mentionOnly: Type.Optional(
-			Type.Boolean({ description: "Only wake pi where the signed-in user is mentioned" }),
+			Type.Union(
+				[
+					Type.Boolean(),
+					Type.Object({
+						default: Type.Optional(Type.Boolean()),
+						chats: Type.Optional(Type.Record(Type.String(), Type.Boolean())),
+						people: Type.Optional(Type.Record(Type.String(), Type.Boolean())),
+					}),
+				],
+				{
+					description:
+						"Whether a message must address you before it wakes pi. `true`/`false` applies everywhere; "
+						+ "`{ default, chats, people }` adds per-chat and per-person overrides, and a rule may be false "
+						+ "to exempt someone who then does not have to mention you. 1:1 chats always count as addressed. "
+						+ "First matching pattern wins.",
+				},
+			),
 		),
 		cooldownSeconds: Type.Optional(
 			Type.Number({ description: "Seconds to stay quiet in a chat after waking pi for it (default 300)" }),
@@ -174,6 +202,7 @@ export const teamsWatchTool = {
 		"Tell the user plainly that listen mode spends a model turn per incoming message, and that pi answers in their name.",
 		"Enabling listen mode takes effect immediately; the settings survive a restart.",
 		"Enabling listen mode answers what arrived since the last run, so say how much is waiting rather than implying only new messages count.",
+		"`mentionOnly` takes a boolean or `{ default, chats, people }`. A 1:1 chat already counts as a direct address, so the overrides are for group and meeting chats — for example a global `true` with one person set to `false`, so that person never has to mention you.",
 	],
 
 	async execute(

@@ -27,11 +27,15 @@ const {
 	writeRootConfig,
 	readRootConfig,
 	removeAccount,
+	resolveMentionOnly,
+	resolveWatchConfig,
 	setSafetyLevel,
 	ConfigError,
 } = await import("../src/config/index.ts");
 
 const { canOpenBrowser } = await import("../src/utils/environment.ts");
+
+type MentionOnlyConfig = import("../src/config/index.ts").MentionOnlyConfig;
 
 const baseAccount = {
 	name: "work",
@@ -224,5 +228,47 @@ describe("template", () => {
 
 		// Existing files are never overwritten.
 		assert.equal(ensureConfigTemplate(), false);
+	});
+});
+
+describe("mention-only resolution", () => {
+	test("a plain boolean still means everywhere", () => {
+		assert.deepEqual(resolveMentionOnly(true), { default: true, chats: [], people: [] });
+		assert.deepEqual(resolveMentionOnly(false), { default: false, chats: [], people: [] });
+		assert.deepEqual(resolveMentionOnly(undefined), { default: false, chats: [], people: [] });
+	});
+
+	test("keeps chat and person overrides in config order", () => {
+		const resolved = resolveMentionOnly({
+			default: true,
+			chats: { "*Holodeck*": false, "19:*": true },
+			people: { "anna@contoso.com": false },
+		});
+
+		assert.equal(resolved.default, true);
+		assert.deepEqual(resolved.chats, [
+			{ pattern: "*Holodeck*", value: false },
+			{ pattern: "19:*", value: true },
+		]);
+		assert.deepEqual(resolved.people, [{ pattern: "anna@contoso.com", value: false }]);
+	});
+
+	test("drops entries a hand-edited file got wrong", () => {
+		const broken = {
+			chats: { " ": true, "*": "yes", "*Holodeck*": true },
+		} as unknown as MentionOnlyConfig;
+
+		const resolved = resolveMentionOnly(broken);
+		assert.equal(resolved.default, false);
+		assert.deepEqual(resolved.chats, [{ pattern: "*Holodeck*", value: true }]);
+	});
+
+	test("an account that sets the switch replaces it whole", () => {
+		const effective = resolveWatchConfig(
+			{ mentionOnly: { default: true, people: { "anna@contoso.com": false } } },
+			{ ...baseAccount, watch: { mentionOnly: false } },
+		);
+
+		assert.deepEqual(effective.mentionOnly, { default: false, chats: [], people: [] });
 	});
 });

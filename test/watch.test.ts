@@ -13,9 +13,11 @@ import {
 	chatsToExamine,
 	createWatchState,
 	isFromMe,
+	isDirectChat,
 	isUnread,
 	isWatchedChat,
 	isWatchedSender,
+	mentionRequired,
 	mentionsMe,
 	noteDeferral,
 	noteWake,
@@ -27,7 +29,7 @@ import {
 	wakesThisHour,
 } from "../src/watch/index.ts";
 import { composeWatchPrompt } from "../src/watch/prompt.ts";
-import { WATCH_DEFAULTS, type ResolvedWatchConfig } from "../src/config/index.ts";
+import { WATCH_DEFAULTS, type MentionOnlyRule, type ResolvedMentionOnly, type ResolvedWatchConfig } from "../src/config/index.ts";
 import type { ChatSummary, MessageSummary, SignedInUser } from "../src/types.ts";
 
 const ME: SignedInUser = {
@@ -54,6 +56,29 @@ function chat(overrides: Partial<ChatSummary> = {}): ChatSummary {
 		lastMessageFrom: "Anna Schmidt",
 		...overrides,
 	};
+}
+
+/** A resolved mention-only switch built from the parts a test cares about. */
+function mentionOnly(
+	defaultValue: boolean,
+	chats: MentionOnlyRule[] = [],
+	people: MentionOnlyRule[] = [],
+): ResolvedMentionOnly {
+	return { default: defaultValue, chats, people };
+}
+
+/** A group chat, where an @-mention is the only way to be addressed. */
+function groupChat(overrides: Partial<ChatSummary> = {}): ChatSummary {
+	return chat({
+		id: "group-1",
+		chatType: "group",
+		label: "Stream Technology: Holodeck",
+		members: [
+			{ displayName: "Anna Schmidt", mail: "anna.schmidt@contoso.com" },
+			{ displayName: "Patrick Weppelmann", mail: "patrick@contoso.com" },
+		],
+		...overrides,
+	});
 }
 
 function message(overrides: Partial<MessageSummary> = {}): MessageSummary {
@@ -131,6 +156,95 @@ describe("isWatchedSender", () => {
 	});
 });
 
+describe("isDirectChat", () => {
+	test("a chat with one other person is direct", () => {
+		assert.equal(isDirectChat(chat(), ME), true);
+	});
+
+	test("a group or meeting chat is not", () => {
+		assert.equal(isDirectChat(groupChat(), ME), false);
+		assert.equal(isDirectChat(groupChat({ chatType: "meeting" }), ME), false);
+	});
+
+	test("without a chatType the member list decides", () => {
+		// Two other people: not a 1:1, whatever the chat is called.
+		const crowd = groupChat({
+			chatType: "unknown",
+			members: [
+				{ displayName: "Anna Schmidt" },
+				{ displayName: "Bernd Meier" },
+				{ displayName: "Patrick Weppelmann" },
+			],
+		});
+		assert.equal(isDirectChat(crowd, ME), false);
+
+		// One other person, whether or not Graph lists the signed-in user.
+		const withMe = groupChat({
+			chatType: "unknown",
+			members: [
+				{ id: "me-1", displayName: "Patrick Weppelmann" },
+				{ id: "other-1", displayName: "Anna Schmidt" },
+			],
+		});
+		assert.equal(isDirectChat(withMe, ME), true);
+
+		const withoutMe = groupChat({
+			chatType: "unknown",
+			members: [{ id: "other-1", displayName: "Anna Schmidt" }],
+		});
+		assert.equal(isDirectChat(withoutMe, ME), true);
+	});
+});
+
+describe("mention-only rules", () => {
+	test("a plain true applies to group chats", () => {
+		const on = watch({ mentionOnly: mentionOnly(true) });
+		const off = watch({ mentionOnly: mentionOnly(false) });
+		assert.equal(mentionRequired(groupChat(), message(), ME, on), true);
+		assert.equal(mentionRequired(groupChat(), message(), ME, off), false);
+	});
+
+	test("a 1:1 counts as addressed even when the default says otherwise", () => {
+		const on = watch({ mentionOnly: mentionOnly(true) });
+		assert.equal(mentionRequired(chat(), message(), ME, on), false);
+	});
+
+	test("a person rule turns the requirement off and on", () => {
+		const exempt = watch({
+			mentionOnly: mentionOnly(true, [], [{ pattern: "Anna*", value: false }]),
+		});
+		assert.equal(mentionRequired(groupChat(), message(), ME, exempt), false);
+
+		const required = watch({
+			mentionOnly: mentionOnly(false, [], [{ pattern: "Anna*", value: true }]),
+		});
+		assert.equal(mentionRequired(groupChat(), message(), ME, required), true);
+	});
+
+	test("a chat rule beats the 1:1 exemption and the person rule", () => {
+		const named = watch({
+			mentionOnly: mentionOnly(false, [{ pattern: "*Holodeck*", value: true }]),
+		});
+		assert.equal(mentionRequired(groupChat(), message(), ME, named), true);
+
+		// The 1:1 is exempt by default, but an explicit chat rule overrules it.
+		const forced = watch({
+			mentionOnly: mentionOnly(false, [{ pattern: "chat-1", value: true }]),
+		});
+		assert.equal(mentionRequired(chat(), message(), ME, forced), true);
+	});
+
+	test("the first matching pattern wins", () => {
+		const configured = watch({
+			mentionOnly: mentionOnly(false, [], [
+				{ pattern: "Anna*", value: true },
+				{ pattern: "*", value: false },
+			]),
+		});
+		assert.equal(mentionRequired(groupChat(), message(), ME, configured), true);
+	});
+});
+
 describe("shouldWake", () => {
 	test("wakes for a new message from someone else", () => {
 		assert.deepEqual(shouldWake(chat(), message(), ME, watch(), createWatchState(), NOW), { wake: true });
@@ -148,10 +262,12 @@ describe("shouldWake", () => {
 		assert.equal(skipped.wake, false);
 		assert.match(skipped.wake === false ? skipped.reason : "", /sender/);
 
-		const mentions = watch({ mentionOnly: true });
-		assert.equal(shouldWake(chat(), message(), ME, mentions, createWatchState(), NOW).wake, false);
+		const mentions = watch({ mentionOnly: mentionOnly(true) });
+		assert.equal(shouldWake(groupChat(), message(), ME, mentions, createWatchState(), NOW).wake, false);
 		const mentioned = message({ mentions: [{ id: "me-1", displayName: "Patrick Weppelmann" }] });
-		assert.equal(shouldWake(chat(), mentioned, ME, mentions, createWatchState(), NOW).wake, true);
+		assert.equal(shouldWake(groupChat(), mentioned, ME, mentions, createWatchState(), NOW).wake, true);
+		// A direct message is an address, so it needs no mention.
+		assert.equal(shouldWake(chat(), message(), ME, mentions, createWatchState(), NOW).wake, true);
 	});
 
 	test("stays quiet inside the cooldown", () => {

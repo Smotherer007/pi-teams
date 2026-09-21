@@ -123,12 +123,60 @@ export interface WatchConfig {
 	 * listens, `from` decides *to whom*.
 	 */
 	from?: string[];
-	/** Only wake pi where the signed-in user is mentioned (default: false) */
-	mentionOnly?: boolean;
+	/**
+	 * Whether a message has to address pi before it wakes it.
+	 *
+	 * A plain `true`/`false` is the all-or-nothing form and needs no further
+	 * explanation; the object form adds per-scope overrides. See
+	 * `MentionOnlyConfig`.
+	 */
+	mentionOnly?: boolean | MentionOnlyConfig;
 	/** Seconds to stay quiet in a chat after waking pi for it (default: 300) */
 	cooldownSeconds?: number;
 	/** Hard cap on wakes per hour, across all chats (default: 10) */
 	maxTriggersPerHour?: number;
+}
+
+/**
+ * Where a mention is required, and where it is not.
+ *
+ * `mentionOnly: true` on its own is all-or-nothing: in a group or a meeting
+ * chat nobody has to say the user's name, and everyone must. This is the same
+ * switch with per-scope overrides, and a rule may turn the requirement **off**
+ * as well as on.
+ *
+ * One-to-one chats need no override — a direct message is an address — so a
+ * person rule is about that person in the chats that have other people in them.
+ * `mentionRequired` holds the exact order the rules are applied in.
+ *
+ * Patterns are matched like every other scope rule: chats against topic,
+ * label, chat ID and participant names; people against display name, UPN,
+ * e-mail and id. The **first** matching entry wins, so write the specific rule
+ * above the general one.
+ */
+export interface MentionOnlyConfig {
+	/** Baseline when no override matches (default: false) */
+	default?: boolean;
+	/** `{ "pattern": true|false }` — whether a mention is required in that chat */
+	chats?: Record<string, boolean>;
+	/** `{ "pattern": true|false }` — whether that person has to mention pi */
+	people?: Record<string, boolean>;
+}
+
+/** One resolved mention-only rule. Order is preserved: first match wins. */
+export interface MentionOnlyRule {
+	pattern: string;
+	value: boolean;
+}
+
+/** The mention-only switch after resolution. */
+export interface ResolvedMentionOnly {
+	/** Used when neither a chat nor a person rule matches */
+	default: boolean;
+	/** Per-chat overrides, in config order */
+	chats: MentionOnlyRule[];
+	/** Per-person overrides, in config order */
+	people: MentionOnlyRule[];
 }
 
 /** A watch config after every default and clamp has been applied. */
@@ -138,7 +186,7 @@ export interface ResolvedWatchConfig {
 	intervalSeconds: number;
 	chats: string[];
 	from: string[];
-	mentionOnly: boolean;
+	mentionOnly: ResolvedMentionOnly;
 	cooldownSeconds: number;
 	maxTriggersPerHour: number;
 }
@@ -333,7 +381,7 @@ export const WATCH_DEFAULTS: ResolvedWatchConfig = {
 	intervalSeconds: 60,
 	chats: [],
 	from: [],
-	mentionOnly: false,
+	mentionOnly: { default: false, chats: [], people: [] },
 	cooldownSeconds: 300,
 	maxTriggersPerHour: 10,
 };
@@ -747,7 +795,7 @@ export function resolveWatchConfig(
 		intervalSeconds: clamp(pick("intervalSeconds"), WATCH_BOUNDS.intervalSeconds, WATCH_DEFAULTS.intervalSeconds),
 		chats: normalizePatterns(pick("chats")),
 		from: normalizePatterns(pick("from")),
-		mentionOnly: pick("mentionOnly") ?? WATCH_DEFAULTS.mentionOnly,
+		mentionOnly: resolveMentionOnly(pick("mentionOnly")),
 		cooldownSeconds: clamp(pick("cooldownSeconds"), WATCH_BOUNDS.cooldownSeconds, WATCH_DEFAULTS.cooldownSeconds),
 		maxTriggersPerHour: clamp(
 			pick("maxTriggersPerHour"),
@@ -755,6 +803,51 @@ export function resolveWatchConfig(
 			WATCH_DEFAULTS.maxTriggersPerHour,
 		),
 	};
+}
+
+/**
+ * Normalise the mention-only switch.
+ *
+ * Exported for tests. A plain boolean keeps working — `true` is
+ * `{ default: true }` with no overrides — so an existing config file needs no
+ * change, and the older key still reads the way it always did.
+ */
+export function resolveMentionOnly(
+	value: boolean | MentionOnlyConfig | undefined,
+): ResolvedMentionOnly {
+	if (typeof value === "boolean") {
+		return { default: value, chats: [], people: [] };
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return { default: false, chats: [], people: [] };
+	}
+
+	return {
+		default: typeof value.default === "boolean" ? value.default : false,
+		chats: normalizeMentionRules(value.chats),
+		people: normalizeMentionRules(value.people),
+	};
+}
+
+/**
+ * Keep only `pattern → boolean` pairs.
+ *
+ * A hand-edited config file can carry anything, and a rule that is neither a
+ * usable pattern nor a boolean is not worth failing the whole config over: it
+ * is dropped, and the default decides instead.
+ */
+function normalizeMentionRules(
+	rules: Record<string, boolean> | undefined,
+): MentionOnlyRule[] {
+	if (!rules || typeof rules !== "object" || Array.isArray(rules)) return [];
+
+	const normalized: MentionOnlyRule[] = [];
+	for (const [pattern, value] of Object.entries(rules)) {
+		const trimmed = typeof pattern === "string" ? pattern.trim() : "";
+		if (!trimmed || typeof value !== "boolean") continue;
+		normalized.push({ pattern: trimmed, value });
+	}
+	return normalized;
 }
 
 /**
