@@ -12,6 +12,7 @@ import { resolveUserId } from "../graph/me.ts";
 import { auditWrite } from "../safety/audit.ts";
 import { CHAT_MESSAGE_BODY_DESCRIPTION, CHAT_SHAPE_GUIDELINE } from "../utils/chat-style.ts";
 import { applyAiFooter } from "../utils/disclosure.ts";
+import { imageNote, readHostedImage } from "../utils/hosted-content.ts";
 import { assertAccess } from "../safety/index.ts";
 import { truncate } from "../utils/formatting.ts";
 import { requireChannel } from "./resolve.ts";
@@ -67,6 +68,13 @@ const sharedParams = {
 	),
 	importance: Type.Optional(Type.String({ description: "'normal' (default), 'high' or 'urgent'" })),
 	html: Type.Optional(Type.Boolean({ description: "Send 'body' as raw HTML instead of converting markdown" })),
+	images: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"Local paths of images to attach (png, jpg, gif, webp, bmp; 4 MB each at most). " +
+				"They are shown inline, under the text.",
+		}),
+	),
 };
 
 export const teamsSendChannelMessageTool = {
@@ -74,7 +82,8 @@ export const teamsSendChannelMessageTool = {
 	description:
 		"Post a new message in a Microsoft Teams channel as the signed-in user. It appears exactly as if the " +
 		"user posted it. Give the channel as a 'Team/Channel' path or pass 'team' separately. " +
-		"'subject' starts a titled post; use teams_reply_channel_message to answer inside an existing thread.",
+		"'subject' starts a titled post; use teams_reply_channel_message to answer inside an existing thread. " +
+		"'images' attaches local image files to the post itself; pi cannot attach other kinds of files.",
 	parameters: Type.Object({
 		...sharedParams,
 		subject: Type.Optional(Type.String({ description: "Optional post title" })),
@@ -99,6 +108,7 @@ export const teamsSendChannelMessageTool = {
 			mentions?: string[];
 			importance?: string;
 			html?: boolean;
+			images?: string[];
 		},
 		signal: AbortSignal | undefined,
 		_onUpdate: undefined,
@@ -106,7 +116,15 @@ export const teamsSendChannelMessageTool = {
 	): Promise<ToolResult> {
 		return run(async () => {
 			const conn = connectionFor(ctx, params.account, params.tenant);
-			if (!params.body.trim()) return errorResult("Refusing to post an empty message.");
+
+			// Read before anything is posted: an image that cannot be read has to stop
+			// the post, not arrive as text promising one.
+			const images = [];
+			for (const path of params.images ?? []) images.push(await readHostedImage(path));
+
+			if (!params.body.trim() && images.length === 0) {
+				return errorResult("Refusing to post an empty message.");
+			}
 
 			const { team, channel } = await requireChannel(conn, params.team, params.channel, "write", signal);
 			const { mentions, error } = await resolveMentions(conn, params.mentions, signal);
@@ -128,6 +146,7 @@ export const teamsSendChannelMessageTool = {
 						subject: params.subject,
 						importance: params.importance,
 						mentions,
+						images,
 					},
 					signal,
 				);
@@ -138,7 +157,7 @@ export const teamsSendChannelMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `channel:${target}`,
-					summary: truncate(body, 200),
+					summary: truncate(body, 200) + imageNote(images),
 				});
 
 				return textResult(
@@ -158,7 +177,7 @@ export const teamsSendChannelMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `channel:${target}`,
-					summary: truncate(body, 200),
+					summary: truncate(body, 200) + imageNote(images),
 					error: err instanceof Error ? err.message : String(err),
 				});
 				throw err;
@@ -172,7 +191,8 @@ export const teamsReplyChannelMessageTool = {
 	description:
 		"Reply inside an existing Microsoft Teams channel thread as the signed-in user. " +
 		"Get the messageId from teams_read_channel, teams_read_thread or teams_search_messages. " +
-		"Replying keeps the conversation in one thread instead of starting a new post.",
+		"Replying keeps the conversation in one thread instead of starting a new post. " +
+		"'images' attaches local image files to the reply itself.",
 	parameters: Type.Object({
 		...sharedParams,
 		messageId: Type.String({ description: "ID of the thread's opening message" }),
@@ -192,6 +212,7 @@ export const teamsReplyChannelMessageTool = {
 			mentions?: string[];
 			importance?: string;
 			html?: boolean;
+			images?: string[];
 		},
 		signal: AbortSignal | undefined,
 		_onUpdate: undefined,
@@ -199,7 +220,15 @@ export const teamsReplyChannelMessageTool = {
 	): Promise<ToolResult> {
 		return run(async () => {
 			const conn = connectionFor(ctx, params.account, params.tenant);
-			if (!params.body.trim()) return errorResult("Refusing to post an empty reply.");
+
+			// Read before anything is posted: an image that cannot be read has to stop
+			// the reply, not arrive as text promising one.
+			const images = [];
+			for (const path of params.images ?? []) images.push(await readHostedImage(path));
+
+			if (!params.body.trim() && images.length === 0) {
+				return errorResult("Refusing to post an empty reply.");
+			}
 
 			const { team, channel } = await requireChannel(conn, params.team, params.channel, "write", signal);
 			const { mentions, error } = await resolveMentions(conn, params.mentions, signal);
@@ -221,6 +250,7 @@ export const teamsReplyChannelMessageTool = {
 						html: params.html,
 						importance: params.importance,
 						mentions,
+						images,
 					},
 					signal,
 				);
@@ -231,7 +261,7 @@ export const teamsReplyChannelMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `channel:${target}#${params.messageId}`,
-					summary: truncate(body, 200),
+					summary: truncate(body, 200) + imageNote(images),
 				});
 
 				return textResult(
@@ -251,7 +281,7 @@ export const teamsReplyChannelMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `channel:${target}#${params.messageId}`,
-					summary: truncate(body, 200),
+					summary: truncate(body, 200) + imageNote(images),
 					error: err instanceof Error ? err.message : String(err),
 				});
 				throw err;

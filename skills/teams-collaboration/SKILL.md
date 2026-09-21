@@ -97,10 +97,10 @@ instead of trying anyway.
 
 | Tool | Use when |
 |------|----------|
-| `teams_send_chat_message` | Sending a chat message |
+| `teams_send_chat_message` | Sending a chat message, with or without images |
 | `teams_create_chat` | Starting a new conversation |
-| `teams_send_channel_message` | Posting a new channel message |
-| `teams_reply_channel_message` | Answering inside an existing thread |
+| `teams_send_channel_message` | Posting a new channel message, with or without images |
+| `teams_reply_channel_message` | Answering inside an existing thread, with or without images |
 | `teams_react` | Adding or removing an emoji reaction |
 | `teams_update_message` | Fixing a message the user already sent |
 | `teams_chat_members` | Bringing someone into a group chat, or taking them out |
@@ -239,6 +239,24 @@ deliberate and must not be worked around:
   them, by setting `downloadDir` in the configuration.
 
 Ordinary SharePoint and OneDrive attachments download normally.
+
+### Sending images
+
+The three send tools take `images: ["/path/bild.png"]`: local pictures to attach
+to the message. They are shown under the text, a message may be images only, and
+nothing is uploaded anywhere — Teams keeps them inside the message.
+
+- png, jpeg, gif, webp, bmp, **at most 4 MB each**. Anything else is refused
+  before the message is built; report that instead of retrying with the same file.
+- The path is read by the process that sends. Inside a container that is a path
+  *inside* the container, not on the user's machine.
+- Only images. A PDF, DOCX or ZIP cannot be attached — give the user a link to
+  the file instead. Do not promise an attachment you cannot send.
+- The confirmation prompt and the audit entry name the images that go out, so
+  what the user approves is what is sent.
+
+For a table, the same applies as for any other non-image: put it in a file and
+link it.
 
 ## Channel addressing
 

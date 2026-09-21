@@ -23,6 +23,7 @@ import { auditWrite } from "../safety/audit.ts";
 import { assertAccess } from "../safety/index.ts";
 import { CHAT_MESSAGE_BODY_DESCRIPTION, CHAT_SHAPE_GUIDELINE } from "../utils/chat-style.ts";
 import { applyAiFooter } from "../utils/disclosure.ts";
+import { imageNote, readHostedImage } from "../utils/hosted-content.ts";
 import { truncate } from "../utils/formatting.ts";
 import { requireChat } from "./resolve.ts";
 import {
@@ -46,6 +47,7 @@ interface SendChatParams {
 	mentions?: string[];
 	importance?: string;
 	html?: boolean;
+	images?: string[];
 }
 
 export const teamsSendChatMessageTool = {
@@ -54,7 +56,8 @@ export const teamsSendChatMessageTool = {
 		"Send a message in a Microsoft Teams chat as the signed-in user. The message appears exactly as if the " +
 		"user typed it. Accepts a chat ID, group chat topic, or participant name/e-mail. " +
 		"Use 'mentions' with names or e-mail addresses to @-mention people — write '@Display Name' in the body " +
-		"where the mention should appear.",
+		"where the mention should appear. " +
+		"'images' attaches local image files to the message itself; pi cannot attach other kinds of files.",
 	parameters: Type.Object({
 		chat: Type.String({ description: "Chat ID, group chat topic, or a participant's name/e-mail" }),
 		body: Type.String({ description: CHAT_MESSAGE_BODY_DESCRIPTION }),
@@ -70,6 +73,13 @@ export const teamsSendChatMessageTool = {
 		),
 		html: Type.Optional(
 			Type.Boolean({ description: "Send 'body' as raw HTML instead of converting markdown" }),
+		),
+		images: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					"Local paths of images to attach to the message (png, jpg, gif, webp, bmp; 4 MB each at most). " +
+					"They are shown inline, under the text.",
+			}),
 		),
 	}),
 	promptSnippet: "Send a message in a Teams chat as the user",
@@ -91,7 +101,14 @@ export const teamsSendChatMessageTool = {
 		return run(async () => {
 			const conn = connectionFor(ctx, params.account, params.tenant);
 
-			if (!params.body.trim()) return errorResult("Refusing to send an empty message.");
+			// Read before anything is sent: a picture that cannot be read has to stop
+			// the message, not arrive as text promising one.
+			const images = [];
+			for (const path of params.images ?? []) images.push(await readHostedImage(path));
+
+			if (!params.body.trim() && images.length === 0) {
+				return errorResult("Refusing to send an empty message.");
+			}
 
 			const chat = await requireChat(conn, params.chat, "write", signal);
 
@@ -129,6 +146,7 @@ export const teamsSendChatMessageTool = {
 						html: params.html,
 						importance: params.importance,
 						mentions,
+						images,
 					},
 					signal,
 				);
@@ -139,7 +157,7 @@ export const teamsSendChatMessageTool = {
 					tenant: conn.tenant,
 					actor: me?.upn,
 					target: `chat:${chat.label}`,
-					summary: truncate(body, 200),
+					summary: truncate(body, 200) + imageNote(images),
 				});
 
 				// Replying is reading: clear the unread marker the answer was written for.

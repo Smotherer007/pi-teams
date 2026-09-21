@@ -150,4 +150,66 @@ describe("buildMessageBody", () => {
 	test("omits the mentions array entirely when there are none", () => {
 		assert.equal("mentions" in buildMessageBody({ body: "x" }), false);
 	});
+
+	test("attaches images as hosted contents the body points at", () => {
+		const body = buildMessageBody({
+			body: "Hier das Diagramm",
+			images: [{ name: "diagramm.png", contentType: "image/png", contentBytes: "AAA=" }],
+		});
+
+		const content = (body.body as { content: string }).content;
+		assert.match(content, /<img src="\.\.\/hostedContents\/1\/\$value" alt="diagramm\.png">/);
+		assert.deepEqual(body.hostedContents, [
+			{
+				"@microsoft.graph.temporaryId": "1",
+				contentBytes: "AAA=",
+				contentType: "image/png",
+			},
+		]);
+	});
+
+	test("numbers several images so body and hostedContents agree", () => {
+		const body = buildMessageBody({
+			body: "zwei Bilder",
+			images: [
+				{ name: "a.png", contentType: "image/png", contentBytes: "AAA=" },
+				{ name: "b.jpg", contentType: "image/jpeg", contentBytes: "BBB=" },
+			],
+		});
+
+		const content = (body.body as { content: string }).content;
+		assert.match(content, /hostedContents\/1\/\$value/);
+		assert.match(content, /hostedContents\/2\/\$value/);
+
+		const hosted = body.hostedContents as Record<string, unknown>[];
+		assert.deepEqual(
+			hosted.map((entry) => entry["@microsoft.graph.temporaryId"]),
+			["1", "2"],
+		);
+	});
+
+	test("omits hostedContents entirely when there are no images", () => {
+		assert.equal("hostedContents" in buildMessageBody({ body: "x" }), false);
+	});
+});
+
+describe("formatMutationSummary with images", () => {
+	test("names the images that go out with the message", () => {
+		const summary = formatMutationSummary("teams_send_chat_message", {
+			chat: "Holodeck",
+			body: "Hier das Bild",
+			images: ["/tmp/screenshots/diagramm.png", "/tmp/zwei.jpg"],
+		});
+
+		assert.match(summary, /2 images: diagramm\.png, zwei\.jpg/);
+	});
+
+	test("leaves the summary alone when nothing is attached", () => {
+		const summary = formatMutationSummary("teams_send_chat_message", {
+			chat: "Holodeck",
+			body: "Nur Text",
+		});
+
+		assert.doesNotMatch(summary, /image/);
+	});
 });

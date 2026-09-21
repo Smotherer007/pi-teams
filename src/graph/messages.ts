@@ -12,6 +12,7 @@ import type { ChannelSummary, MessageLocation, MessageSummary, PersonRef } from 
 import { graphGetOptional, graphList, graphPatch, graphPost } from "./client.ts";
 import { mapMessage } from "./mappers.ts";
 import { markdownToTeamsHtml } from "../utils/richtext.ts";
+import type { HostedImage } from "../utils/hosted-content.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Raw = Record<string, any>;
@@ -37,6 +38,13 @@ export interface MessageInput {
 	importance?: string;
 	/** People to @-mention; each must appear in the body as @DisplayName */
 	mentions?: PersonRef[];
+	/**
+	 * Inline images, already read from disk and base64-encoded.
+	 *
+	 * They travel in the same POST as the body — Teams keeps the bytes inside the
+	 * message — so there is no second request and no file upload anywhere.
+	 */
+	images?: HostedImage[];
 }
 
 /**
@@ -77,12 +85,29 @@ export function buildMessageBody(input: MessageInput): Record<string, unknown> {
 		});
 	});
 
+	// The pictures follow the text rather than being placed inside it: the caller
+	// writes the message, and a model that also had to pick a position in the HTML
+	// would be choosing something nobody asked it to choose. The id is ours to
+	// pick — it only has to be the same in the body and in hostedContents, which is
+	// the part that quietly goes wrong.
+	const hostedContents: Record<string, unknown>[] = [];
+	(input.images ?? []).forEach((image, index) => {
+		const id = String(index + 1);
+		content += `<br><img src="../hostedContents/${id}/$value" alt="${escapeHtml(image.name)}">`;
+		hostedContents.push({
+			"@microsoft.graph.temporaryId": id,
+			contentBytes: image.contentBytes,
+			contentType: image.contentType,
+		});
+	});
+
 	const body: Record<string, unknown> = {
 		body: { contentType: "html", content },
 	};
 	if (input.subject) body.subject = input.subject;
 	if (input.importance) body.importance = input.importance;
 	if (mentionEntries.length > 0) body.mentions = mentionEntries;
+	if (hostedContents.length > 0) body.hostedContents = hostedContents;
 
 	return body;
 }

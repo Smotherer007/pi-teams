@@ -41,10 +41,10 @@ the default account. See [configuration.md](configuration.md).
 
 | Tool | Description |
 |------|-------------|
-| `teams_send_chat_message` | Send a chat message as you |
+| `teams_send_chat_message` | Send a chat message as you, optionally with images |
 | `teams_create_chat` | Start a 1:1 or group chat, optionally with the first message |
-| `teams_send_channel_message` | Post in a channel as you |
-| `teams_reply_channel_message` | Reply inside an existing thread |
+| `teams_send_channel_message` | Post in a channel as you, optionally with images |
+| `teams_reply_channel_message` | Reply inside an existing thread, optionally with images |
 | `teams_react` | Add or remove an emoji reaction |
 | `teams_mark_read` | Mark a chat as read (or unread again) — the natural end of a catch-up |
 | `teams_update_message` | Edit a chat message you already sent |
@@ -137,9 +137,11 @@ subset Teams renders in a chat bubble:
 | `[label](https://…)` | link |
 | `# Heading` | a bold line — Teams has no headings in a chat |
 
-Tables and images are deliberately **not** translated: Teams renders neither in
-a chat, so passing them through would look worse than plain text. Put a table in
-a file and link it instead.
+A markdown image and a table are deliberately **not** translated: Teams renders
+neither in a chat bubble, and an image URL would only work if the recipient's
+client could reach it. A picture that is already on disk goes out through the
+`images` parameter instead — see below. For a table, put it in a file and link
+to it.
 
 Pass `html: true` on a send tool to bypass the conversion and supply raw HTML
 instead. Everything else is escaped, so a message body cannot inject markup.
@@ -148,3 +150,30 @@ This is also why pi writes the way it does — short, answer-first, bullets for
 anything enumerable. The medium is a chat bubble, not a document. The rules the
 model follows are in `skills/teams-collaboration/SKILL.md`, under *How to format
 a Teams message*.
+
+## Sending images
+
+`teams_send_chat_message`, `teams_send_channel_message` and
+`teams_reply_channel_message` take `images: ["/pfad/bild.png"]` — local paths of
+pictures to attach. They appear under the text, in the order given, and a
+message may consist of images alone.
+
+Teams keeps an inline picture inside the message itself: the bytes travel in the
+same request as the text, and the body points at them (`hostedContents`).
+Nothing is uploaded to SharePoint first, which is why this works with the
+permissions the package already asks for and costs no admin consent.
+
+- Accepted: png, jpeg, gif, webp, bmp. Anything else is refused before the
+  message is built, because Teams would show it as a broken picture.
+- **4 MB per image**, the limit Graph enforces on hosted content.
+- The path must be readable from the process that sends. For a pi running in a
+  container that is a path *inside* the container.
+
+This is attachments-for-images only. A PDF, a DOCX or a ZIP cannot be sent: a
+real file attachment needs the file in SharePoint or OneDrive and a `contentUrl`
+pointing at it, which means asking for a write scope on the user's drive. The
+package deliberately does not ask for `Files.ReadWrite`, so a non-image is
+refused rather than half-supported — link to the file instead.
+
+What was sent, pictures included, is recorded in the audit entry and shown in
+the confirmation prompt at `safetyLevel: confirm`.

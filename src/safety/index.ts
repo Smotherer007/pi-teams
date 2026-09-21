@@ -119,17 +119,29 @@ export function formatMutationSummary(
 		return str.length > max ? `${str.slice(0, max - 1)}…` : str;
 	};
 	const disclosed = (value: unknown): string => applyAiFooter(text(value, 400), footer);
+	/**
+	 * The images that travel with the message, by file name.
+	 *
+	 * Someone approving a send has to see that a picture is part of it: a
+	 * confirmation that shows only the text would be asking about half of it.
+	 */
+	const withImages = (value: unknown): string => {
+		const paths = Array.isArray(value) ? value.filter((p): p is string => typeof p === "string") : [];
+		if (paths.length === 0) return "";
+		const names = paths.map((p) => p.split(/[\\/]/).pop() ?? p).join(", ");
+		return `\n\n(with ${paths.length === 1 ? "1 image" : `${paths.length} images`}: ${text(names, 120)})`;
+	};
 
 	switch (toolName) {
 		case "teams_send_chat_message":
-			return `Send a chat message to "${text(params.chat, 60)}":\n\n${disclosed(params.body)}`;
+			return `Send a chat message to "${text(params.chat, 60)}":\n\n${disclosed(params.body)}${withImages(params.images)}`;
 		case "teams_send_channel_message": {
 			const where = params.team ? `${text(params.team, 40)}/${text(params.channel, 40)}` : text(params.channel, 60);
-			return `Post in channel ${where}:\n\n${disclosed(params.body)}`;
+			return `Post in channel ${where}:\n\n${disclosed(params.body)}${withImages(params.images)}`;
 		}
 		case "teams_reply_channel_message": {
 			const where = params.team ? `${text(params.team, 40)}/${text(params.channel, 40)}` : text(params.channel, 60);
-			return `Reply in thread ${text(params.messageId, 40)} (${where}):\n\n${disclosed(params.body)}`;
+			return `Reply in thread ${text(params.messageId, 40)} (${where}):\n\n${disclosed(params.body)}${withImages(params.images)}`;
 		}
 		case "teams_create_chat": {
 			const people = Array.isArray(params.participants) ? params.participants.join(", ") : text(params.participants);
