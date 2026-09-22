@@ -17,6 +17,8 @@
  * turn, and one session runs one watcher.
  */
 
+import { workerIdentity, type WorkerIdentity } from "./worker.ts";
+
 /**
  * How long a pin can survive without the turn ending.
  *
@@ -35,6 +37,57 @@ interface Pin {
 
 let pin: Pin | undefined;
 
+/**
+ * Wakes whose prompt is queued but whose turn has not started yet.
+ *
+ * A wake is delivered as a follow-up: when pi is busy it waits in the queue.
+ * Pinning at wake time would therefore move the pin away from the answer that
+ * is still being written — the reply to chat A would be refused because chat B
+ * had just arrived. The pin is taken instead when the queued prompt actually
+ * enters the transcript (see `claimWakePin`), keyed by its exact text.
+ */
+const pending = new Map<string, Pin>();
+
+/** The worker identity of this process, read once. Overridable for tests. */
+let worker: WorkerIdentity | undefined = workerIdentity();
+
+/** Tests only: pretend this process is (or is not) a chat worker. */
+export function setWorkerIdentityForTests(identity: WorkerIdentity | undefined): void {
+	worker = identity;
+}
+
+/**
+ * Remember a queued wake, so its pin can be taken when its turn starts.
+ *
+ * Entries older than the pin TTL are dropped on the way: a prompt that never
+ * made it into a turn (cancelled queue, restart) must not pin a later one.
+ */
+export function queueWakePin(prompt: string, chatId: string, label: string, now = Date.now()): void {
+	for (const [text, entry] of pending) {
+		if (now - entry.at > PIN_TTL_MS) pending.delete(text);
+	}
+	pending.set(prompt, { chatId, label, at: now });
+}
+
+/**
+ * A user message entered the transcript: if it is a queued wake, pin it now.
+ *
+ * Returns whether a pin was taken. Anything else — typed input, other
+ * extensions' prompts — leaves the pin alone.
+ */
+export function claimWakePin(text: string, now = Date.now()): boolean {
+	const entry = pending.get(text);
+	if (!entry) return false;
+	pending.delete(text);
+	pin = { chatId: entry.chatId, label: entry.label, at: now };
+	return true;
+}
+
+/** How many wakes are queued but not yet pinned. */
+export function pendingWakePins(): number {
+	return pending.size;
+}
+
 /** Pin the answer of the turn that is about to start to one chat. */
 export function pinWakeTarget(chatId: string, label: string, now = Date.now()): void {
 	pin = { chatId, label, at: now };
@@ -45,8 +98,17 @@ export function clearWakeTarget(): void {
 	pin = undefined;
 }
 
+/** Tests only: forget every queued wake as well. */
+export function resetWakePinsForTests(): void {
+	pin = undefined;
+	pending.clear();
+}
+
 /** The chat an answer is currently owed to, if any. */
 export function getWakeTarget(now = Date.now()): { chatId: string; label: string } | undefined {
+	// A chat worker is pinned for its whole life: it exists to answer one chat,
+	// so there is no turn after which it may write anywhere else.
+	if (worker) return { chatId: worker.chatId, label: worker.label };
 	if (!pin) return undefined;
 	if (now - pin.at > PIN_TTL_MS) {
 		pin = undefined;

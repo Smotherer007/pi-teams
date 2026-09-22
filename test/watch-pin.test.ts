@@ -10,7 +10,11 @@
 import { test, describe, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+	claimWakePin,
 	clearWakeTarget,
+	queueWakePin,
+	resetWakePinsForTests,
+	setWorkerIdentityForTests,
 	getWakeTarget,
 	pinViolation,
 	pinWakeTarget,
@@ -103,5 +107,39 @@ describe("while an answer is pinned", () => {
 	test("clearing releases everything", () => {
 		clearWakeTarget();
 		assert.equal(pinViolation("teams_send_channel_message", { channel: "Eng/General" }), undefined);
+	});
+});
+
+describe("queued wakes", () => {
+	beforeEach(() => resetWakePinsForTests());
+
+	test("are pinned when their prompt enters the transcript, not when they are queued", () => {
+		pinWakeTarget(CHAT, "Anna Schmidt");
+		queueWakePin("prompt B", "19:bob@thread.v2", "Bob");
+		// Still answering Anna: her reply must go through.
+		assert.equal(pinViolation("teams_send_chat_message", { chat: CHAT }), undefined);
+
+		assert.equal(claimWakePin("prompt B"), true);
+		assert.deepEqual(getWakeTarget(), { chatId: "19:bob@thread.v2", label: "Bob" });
+	});
+
+	test("other user messages leave the pin alone", () => {
+		pinWakeTarget(CHAT, "Anna Schmidt");
+		assert.equal(claimWakePin("something typed"), false);
+		assert.equal(getWakeTarget()?.chatId, CHAT);
+	});
+});
+
+describe("in a chat worker", () => {
+	test("the pin is the worker's chat, permanently", () => {
+		setWorkerIdentityForTests({ chatId: CHAT, label: "Anna Schmidt" });
+		try {
+			clearWakeTarget();
+			assert.equal(getWakeTarget(Date.now() + PIN_TTL_MS * 10)?.chatId, CHAT);
+			assert.match(pinViolation("teams_send_chat_message", { chat: "19:x@thread.v2" }) ?? "", /Anna Schmidt/);
+			assert.equal(pinViolation("teams_send_chat_message", { chat: CHAT }), undefined);
+		} finally {
+			setWorkerIdentityForTests(undefined);
+		}
 	});
 });
