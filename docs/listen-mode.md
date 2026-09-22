@@ -50,6 +50,7 @@ never sees.
 | `mentionOnly` | `false` | whether a message has to address you: `true`/`false`, or `{ default, chats, people }` for overrides. See [below](#who-has-to-address-pi). |
 | `cooldownSeconds` | `300` | stay quiet in a chat after waking pi for it |
 | `maxTriggersPerHour` | `10` | hard cap on wakes per hour |
+| `dispatch` | `{ "mode": "session" }` | where a wake is answered: in this session, or by one pi process per chat. See [below](#one-pi-process-per-chat). |
 
 Set it globally, or per account — the account level wins field by field.
 `teams_watch` writes the same keys; `/teams-listen` writes to the session's
@@ -151,6 +152,87 @@ The pin covers outgoing messages only — reading, presence and the calendar sta
 untouched, because a gate that blocked ordinary work would be met far more often
 than an attack. It is released when the turn ends, and expires by itself after
 15 minutes so a turn that never ends cannot lock you out of your own tools.
+
+The pin is taken when the wake's prompt actually **enters the transcript**, not
+when the message is picked up. A wake that arrives while pi is still answering
+another chat waits in the queue; pinning it right away would take the pin away
+from the answer that is still being written, and that answer would be refused.
+
+In [dispatch mode](#one-pi-process-per-chat) every worker is pinned to its chat
+for its whole life: it exists to answer that one conversation.
+
+## One pi process per chat
+
+By default every wake is a follow-up in the session that runs the watcher. That
+session works on one chat at a time: while it answers Anna, Bob waits, and when
+Anna asked for something that takes twenty minutes, Bob waits twenty minutes.
+
+`dispatch.mode: "process"` hands every chat a pi process of its own:
+
+```json
+"watch": {
+  "dispatch": {
+    "mode": "process",
+    "maxConcurrent": 3,
+    "maxWorkers": 6,
+    "idleMinutes": 30,
+    "freshAfterHours": 72,
+    "args": ["--model", "provider/model-id"],
+    "stopWords": ["stop", "stopp", "abbrechen"],
+    "resetWords": ["neues thema", "new topic"],
+    "historyReaders": ["you@contoso.com"]
+  }
+}
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `mode` | `"session"` | `"process"` switches the worker pool on |
+| `maxConcurrent` | `3` | chats worked on at the same time (1-16); more wait in line |
+| `maxWorkers` | `6` | processes kept alive, busy or idle; the longest-idle one makes room |
+| `idleMinutes` | `30` | an idle worker exits after this; its session stays on disk |
+| `freshAfterHours` | `72` | a chat quiet for longer starts a fresh session (`0` = always continue) |
+| `command` | `"pi"` | the pi executable |
+| `args` | `[]` | extra arguments for every worker, e.g. the model |
+| `stopWords` | `stop, stopp, abbrechen, abbruch, cancel` | a message that is only this word aborts the running work |
+| `resetWords` | `neues thema, new topic, reset` | a message that is only this word starts the chat over |
+| `historyReaders` | `[]` | who may use `teams_history` from their one-to-one chat with pi |
+
+How it behaves:
+
+| In Teams | What happens |
+|----------|--------------|
+| Messages in different chats | answered in parallel, each by its chat's worker |
+| Next message in the same chat | the chat's session continues, with the whole conversation so far |
+| A message while the worker is busy | steered into the running turn: read after the current step, not after the task |
+| `stopp` | the running turn is aborted; the model confirms in one line |
+| `neues Thema` | the worker ends, the chat starts a fresh session; the old one stays on disk |
+| More busy chats than `maxConcurrent` | the next chat waits for a free slot; a newer message replaces its waiting one |
+
+Each worker runs `pi --mode rpc --session-dir <agent dir>/pi-teams-chats/<hash>`
+with `--continue` while the chat's last session is recent. It loads the same
+extensions and config as any pi, with three differences set through its
+environment (`PI_TEAMS_WORKER_CHAT` and friends): it never starts a watcher, it
+may write to its own chat only, and `teams_watch`, `teams_setup` and
+`teams_logout` are closed to it. Dialogs a worker would show are cancelled,
+because nobody sits in front of it, so run it with `safetyLevel: "open"` and
+keep the guardrails in `from`, the pin and the permission rules.
+
+The watching session only routes. `/teams-dispatch` shows which chats are being
+worked on, which are idle and which wait.
+
+### What pi said in other chats
+
+Separate sessions mean that no single context knows what pi told somebody else.
+Two logs do, and `teams_history` reads them:
+
+- `kind: "sent"`: every message pi sent, from the audit log (`audit: true`).
+- `kind: "dispatch"`: every request a worker picked up and a short form of its
+  answer, from `pi-teams-dispatch.jsonl` in the agent directory.
+
+Nothing from one chat reaches another chat's context by itself. Inside a worker
+the tool answers only in a one-to-one chat with a person listed in
+`historyReaders`; the watching session is never restricted.
 
 ## Cost
 

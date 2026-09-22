@@ -21,6 +21,7 @@ the default account. See [configuration.md](configuration.md).
 | Tool | Description |
 |------|-------------|
 | `teams_inbox` | Chats with new messages plus recent mentions of you |
+| `teams_history` | What pi sent across chats (audit log), or what the per-chat workers were asked and answered (dispatch journal). Read-only; see [listen mode](listen-mode.md#what-pi-said-in-other-chats) |
 | `teams_list_chats` | Recent chats with a preview of the last message |
 | `teams_read_chat` | Messages of one chat |
 | `teams_list_teams` | Teams you belong to |
@@ -74,6 +75,7 @@ usual; correcting a channel post stays in the Teams client.
 | `/teams-login` | Sign in to Teams as yourself |
 | `/teams-inbox` | What needs your attention right now |
 | `/teams-listen` | Listen mode: `on`, `off`, or `status` |
+| `/teams-dispatch` | Listen mode with one pi process per chat: who is being worked on, who is idle, who waits |
 | `/teams-permissions` | What pi may and may not do |
 | `/teams-doctor` | Diagnose the setup |
 

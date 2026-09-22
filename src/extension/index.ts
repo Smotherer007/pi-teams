@@ -11,6 +11,7 @@ import { Box, Text } from "@earendil-works/pi-tui";
 
 import {
 	ensureConfigTemplate,
+	getAgentDir,
 	getConfigPath,
 	setWatchConfig,
 	type ResolvedMentionOnly,
@@ -38,7 +39,11 @@ import {
 } from "../watch/loop.ts";
 import { composeWatchPrompt } from "../watch/prompt.ts";
 import { setChatReadState } from "../graph/chats.ts";
-import { clearWakeTarget, pinViolation, pinWakeTarget } from "../watch/pin.ts";
+import { claimWakePin, clearWakeTarget, pinViolation, queueWakePin } from "../watch/pin.ts";
+import { ChatDispatcher, excerpt } from "../watch/dispatch.ts";
+import { controlAction } from "../watch/control.ts";
+import { workerIdentity, workerViolation } from "../watch/worker.ts";
+import { withSenderAddresses } from "../watch/index.ts";
 import { readWatchCursor, writeWatchCursor } from "../watch/cursor.ts";
 
 import { teamsSetupTool } from "../tools/teams-setup.ts";
@@ -71,6 +76,7 @@ import { teamsChatMembersTool } from "../tools/teams-chat-members.ts";
 import { teamsAvailabilityTool } from "../tools/teams-availability.ts";
 import { teamsDeleteMessageTool } from "../tools/teams-delete-message.ts";
 import { teamsInboxTool } from "../tools/teams-inbox.ts";
+import { teamsHistoryTool } from "../tools/teams-history.ts";
 import { teamsWatchTool } from "../tools/teams-watch.ts";
 import {
 	teamsGetPresenceTool,
@@ -137,6 +143,7 @@ const tools = [
 	teamsUpdateMessageTool,
 	teamsDeleteMessageTool,
 	teamsInboxTool,
+	teamsHistoryTool,
 	// Presence
 	teamsGetPresenceTool,
 	teamsSetPresenceTool,
@@ -177,6 +184,37 @@ export default function (pi: ExtensionAPI) {
 	 * where the last one stopped instead of losing the interval in between.
 	 */
 	let watchSignature: string | undefined;
+
+	/**
+	 * Set when this process is a chat worker started by a dispatcher: it answers
+	 * one chat, never watches, and may write nowhere else (see ../watch/worker.ts).
+	 */
+	const worker = workerIdentity();
+
+	/** The per-chat worker pool, in dispatch mode `process`. Created on the first wake. */
+	let dispatcher: ChatDispatcher | undefined;
+	/** The context the dispatcher reports problems to. */
+	let dispatchCtx: any;
+
+	const dispatcherFor = (conn: TeamsConnection, ctx: any): ChatDispatcher => {
+		dispatchCtx = ctx;
+		if (dispatcher) {
+			dispatcher.configure(conn.watch.dispatch);
+			return dispatcher;
+		}
+		dispatcher = new ChatDispatcher({
+			config: conn.watch.dispatch,
+			agentDir: getAgentDir(),
+			cwd: ctx?.cwd ?? process.cwd(),
+			onError: (message) => dispatchCtx?.ui?.notify?.(message, "warning"),
+		});
+		return dispatcher;
+	};
+
+	const stopDispatcher = () => {
+		dispatcher?.stopAll();
+		dispatcher = undefined;
+	};
 
 	/** The last polling error the user was told about, so it is said once. */
 	let reportedWatchError: string | undefined;
@@ -222,10 +260,6 @@ export default function (pi: ExtensionAPI) {
 			cursor: readWatchCursor(conn.account, conn.tenantId),
 			persistCursor: (seen) => writeWatchCursor(conn.account, conn.tenantId, seen),
 			onWake: (event) => {
-				// Pin before the prompt is delivered: the turn it starts may only
-				// answer the chat that woke pi, and the message it is about to read
-				// was written by somebody else.
-				pinWakeTarget(event.chat.id, event.chat.label);
 				// Mark the chat read the moment pi picks it up: with read receipts on,
 				// the sender sees the "seen" eye right away — the closest thing to a
 				// typing indicator Graph offers (there is no typing API for users).
@@ -233,7 +267,30 @@ export default function (pi: ExtensionAPI) {
 				if (event.me?.id) {
 					void setChatReadState(conn, event.chat.id, event.me, true).catch(() => undefined);
 				}
-				pi.sendUserMessage(composeWatchPrompt(event, event.me), { deliverAs: "followUp" });
+				const prompt = composeWatchPrompt(event, event.me);
+
+				// Dispatch mode: the chat's own worker answers, in parallel with other chats.
+				if (conn.watch.dispatch.mode === "process") {
+					const message = withSenderAddresses(event.message, event.chat);
+					dispatcherFor(conn, ctx).deliver({
+						chatId: event.chat.id,
+						label: event.chat.label,
+						chatType: event.chat.chatType,
+						from: message.from?.displayName,
+						peer: message.from?.mail ?? message.from?.upn,
+						prompt,
+						request: excerpt(message.text),
+						control: controlAction(message, conn.watch.dispatch, event.me?.displayName),
+					});
+					return;
+				}
+
+				// Session mode: the turn this prompt starts may only answer the chat
+				// that woke pi. The pin is taken when the prompt enters the transcript,
+				// not now: while pi is busy the prompt waits in the queue, and pinning
+				// here would take the pin away from the answer still being written.
+				queueWakePin(prompt, event.chat.id, event.chat.label);
+				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 			},
 			onTick: (status) => {
 				if (!status.lastError) reportedWatchError = undefined;
@@ -384,7 +441,35 @@ export default function (pi: ExtensionAPI) {
 					conn.watch.from.length > 0 ? `people: ${conn.watch.from.join(", ")}` : "any sender",
 					mentionSummary(conn.watch.mentionOnly),
 					runtime ? `${runtime.wakesThisHour} wake(s) this hour` : "not running in this session",
+					conn.watch.dispatch.mode === "process"
+						? `one process per chat (${dispatcher?.status().busy ?? 0}/${conn.watch.dispatch.maxConcurrent} busy)`
+						: "answers in this session",
 				].join(" · "),
+				"info",
+			);
+		},
+	});
+
+	pi.registerCommand("teams-dispatch", {
+		description: "Show the per-chat workers of listen mode (dispatch mode process)",
+		handler: async (_args, ctx) => {
+			const conn = refresh();
+			if (!conn || conn.watch.dispatch.mode !== "process") {
+				ctx.ui.notify("Teams dispatch: off. Every wake is a turn in this session (watch.dispatch.mode).", "info");
+				return;
+			}
+			const status = dispatcher?.status();
+			if (!status || status.alive + status.queued === 0) {
+				ctx.ui.notify(`Teams dispatch: no worker running (max ${conn.watch.dispatch.maxConcurrent} in parallel).`, "info");
+				return;
+			}
+			const minutes = (ms: number) => `${Math.max(0, Math.round(ms / 60_000))} min`;
+			ctx.ui.notify(
+				[
+					`Teams dispatch: ${status.busy}/${status.maxConcurrent} busy, ${status.alive} alive, ${status.queued} waiting`,
+					...status.chats.map((c) => `- ${c.label}: ${c.busy ? `working for ${minutes(c.sinceMs)}` : `idle for ${minutes(c.sinceMs)}`}`),
+					...status.waiting.map((c) => `- ${c.label}: waiting for a slot`),
+				].join("\n"),
 				"info",
 			);
 		},
@@ -456,7 +541,9 @@ export default function (pi: ExtensionAPI) {
 		// and the same config: autoStart there would run a second watcher that
 		// answers chats inside a throwaway process and advances the shared cursor,
 		// so the real session never sees those messages.
-		if (connection.watch.autoStart && ctx.hasUI) startWatch(ctx, { explicit: true });
+		// A chat worker (--mode rpc, so hasUI is true) is excluded by name: it is
+		// started by the watcher and must never become one.
+		if (connection.watch.autoStart && ctx.hasUI && !worker) startWatch(ctx, { explicit: true });
 
 		paintStatus(ctx);
 
@@ -515,6 +602,26 @@ export default function (pi: ExtensionAPI) {
 		// The timer would be unref'd anyway, but a poll in flight during shutdown
 		// would still be a Graph call for a session that is gone.
 		stopWatch();
+		// Workers end with the session that started them; their sessions stay on disk.
+		stopDispatcher();
+	});
+
+	// A queued wake prompt has entered the transcript: its turn starts now, so
+	// this is when the answer gets pinned to its chat.
+	pi.on("message_start", async (event: any) => {
+		const message = event?.message;
+		if (message?.role !== "user") return;
+		const content = message.content;
+		const text =
+			typeof content === "string"
+				? content
+				: Array.isArray(content)
+					? content
+							.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+							.map((part: any) => part.text)
+							.join("")
+					: "";
+		if (text) claimWakePin(text);
 	});
 
 	// -----------------------------------------------------------------------
@@ -528,6 +635,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		const workerBlock = workerViolation(event.toolName, worker);
+		if (workerBlock) return { block: true, reason: workerBlock };
+
 		if (!isMutationTool(event.toolName)) return;
 
 		// A tool may target a different account than the session default, so the
@@ -596,6 +706,7 @@ export default function (pi: ExtensionAPI) {
 			// A watcher polling a session that was just removed only produces
 			// errors; leaving it running would be noise, not service.
 			stopWatch();
+			stopDispatcher();
 		} else if (WATCH_CONFIG_TOOLS.has(event.toolName)) {
 			// Only `enable` is a decision. A status call, or a re-read after
 			// teams_setup, may stop the loop but never start it.
