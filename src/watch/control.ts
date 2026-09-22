@@ -1,21 +1,14 @@
 /**
- * Listen mode — control words in a chat.
+ * Listen mode — the text of a trigger, as a command.
  *
- * In dispatch mode a chat has a pi process that may be in the middle of
- * something. Two short messages steer that process instead of adding to its
- * work: a stop word aborts what it is doing, a reset word starts the chat over
- * with a fresh session. Both still reach the model afterwards, so the person
- * gets a one-line confirmation in the chat instead of silence.
- *
- * Deliberately strict: the whole message has to be the word (a mention of pi
- * and punctuation aside). "Stop the deployment on hera" is a request, not a
- * control word, and must be read by the model like any other.
+ * A router such as pi-lanes can treat a short message as a control word
+ * ("stopp", "neues Thema") instead of a request. It needs the message the way
+ * the person meant it: without the mention of pi in front, without
+ * punctuation. This module produces exactly that, and nothing more; which
+ * words mean what is the router's business.
  */
 
-import type { ResolvedDispatchConfig } from "../config/index.ts";
 import type { MessageSummary } from "../types.ts";
-
-export type ControlAction = "stop" | "reset";
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -45,16 +38,8 @@ export function selfNames(displayName: string | undefined): string[] {
 	return [displayName, short].filter(Boolean);
 }
 
-/** Whether the newest message is a control word, and which. */
-export function controlAction(
-	message: Pick<MessageSummary, "text" | "mentions">,
-	dispatch: Pick<ResolvedDispatchConfig, "stopWords" | "resetWords">,
-	myDisplayName?: string,
-): ControlAction | undefined {
+/** The newest message as a command: no mentions, no punctuation, lower case. */
+export function commandText(message: Pick<MessageSummary, "text" | "mentions">, myDisplayName?: string): string {
 	const names = [...(message.mentions ?? []).map((m) => m.displayName), ...selfNames(myDisplayName)];
-	const text = normalizeCommand(message.text ?? "", names);
-	if (!text) return undefined;
-	if (dispatch.resetWords.includes(text)) return "reset";
-	if (dispatch.stopWords.includes(text)) return "stop";
-	return undefined;
+	return normalizeCommand(message.text ?? "", names);
 }

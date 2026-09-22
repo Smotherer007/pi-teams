@@ -16,7 +16,6 @@ import {
 	type ResolvedMentionOnly,
 	type TeamsConnection,
 	type WatchConfig,
-	type ResolvedDispatchConfig,
 } from "../config/index.ts";
 import { getActiveWatchLoop, type WatchRuntimeStatus } from "../watch/loop.ts";
 import { getWatchCursorPath } from "../watch/cursor.ts";
@@ -73,7 +72,6 @@ function describe(watch: {
 	mentionOnly: ResolvedMentionOnly;
 	cooldownSeconds: number;
 	maxTriggersPerHour: number;
-	dispatch?: ResolvedDispatchConfig;
 }): string {
 	return [
 		`- enabled: ${watch.enabled}`,
@@ -84,9 +82,6 @@ function describe(watch: {
 		describeMentionOnly(watch.mentionOnly),
 		`- cooldown per chat: ${watch.cooldownSeconds} s`,
 		`- wake limit: ${watch.maxTriggersPerHour} per hour`,
-		watch.dispatch?.mode === "process"
-			? `- dispatch: one pi process per chat, ${watch.dispatch.maxConcurrent} in parallel`
-			: "- dispatch: every wake is a turn in this session",
 	].join("\n");
 }
 

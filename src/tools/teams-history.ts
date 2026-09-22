@@ -1,24 +1,21 @@
 /**
- * teams_history — what pi wrote in Teams, and what the chat workers were asked.
+ * teams_history — what pi wrote in Teams, across chats.
  *
- * In dispatch mode every chat has a session of its own, so no single context
- * knows what pi said elsewhere. This tool answers "what did you tell Anna
- * today?" from the two logs that do know: the audit log (every message pi
- * sent, see ../safety/audit.ts) and the dispatch journal (every request a chat
- * worker picked up, and its answer, see ../watch/dispatch.ts).
+ * When every chat is answered by a pi process of its own (a lane, e.g. with
+ * pi-lanes), no single context knows what pi said elsewhere. The audit log
+ * does (every message pi sent, see ../safety/audit.ts), and this tool reads it
+ * to answer "what did you tell Anna today?".
  *
- * Reading across chats is exactly what the per-chat sessions exist to prevent
- * by default, so inside a chat worker the tool answers only in a one-to-one
- * chat with somebody listed in `watch.dispatch.historyReaders`. The watching
- * session — the user at the keyboard — is never restricted.
+ * Reading across chats is exactly what separate processes prevent by default,
+ * so in a process that answers one chat the tool works only in a one-to-one
+ * chat with somebody listed in `watch.historyReaders`. The session a person
+ * types in is never restricted.
  */
 
 import { existsSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { Type } from "typebox";
-import { getAgentDir } from "../config/index.ts";
 import { matchesPattern } from "../config/scope.ts";
 import { getAuditPath } from "../safety/audit.ts";
-import { getDispatchJournalPath } from "../watch/dispatch.ts";
 import { workerIdentity, type WorkerIdentity } from "../watch/worker.ts";
 import { errorResult, run, textResult, type ToolContext, type ToolResult } from "./shared.ts";
 
@@ -64,12 +61,11 @@ export function historyRefusal(identity: WorkerIdentity | undefined, readers: st
 	if (allowed) return undefined;
 	return (
 		"What pi wrote in other chats is not available in this chat. Each chat keeps its own context, and only " +
-		"the people listed in watch.dispatch.historyReaders may look across chats, from their one-to-one chat with pi."
+		"the people listed in watch.historyReaders may look across chats, from their one-to-one chat with pi."
 	);
 }
 
 interface HistoryParams {
-	kind?: "sent" | "dispatch";
 	chat?: string;
 	sinceHours?: number;
 	limit?: number;
@@ -77,7 +73,6 @@ interface HistoryParams {
 
 /** Filter and render log entries. Exported for tests. */
 export function renderHistory(entries: Record<string, any>[], params: HistoryParams, now = Date.now()): string {
-	const kind = params.kind ?? "sent";
 	const limit = Math.min(Math.max(params.limit ?? 20, 1), 200);
 	const since = now - Math.min(Math.max(params.sinceHours ?? 24, 1), 24 * 90) * 3_600_000;
 	const needle = params.chat?.trim().toLowerCase();
@@ -86,29 +81,16 @@ export function renderHistory(entries: Record<string, any>[], params: HistoryPar
 		const at = Date.parse(entry.at ?? "");
 		if (!Number.isFinite(at) || at < since) return false;
 		if (!needle) return true;
-		const haystack =
-			kind === "sent"
-				? `${entry.target ?? ""} ${entry.summary ?? ""}`
-				: `${entry.chat ?? ""} ${entry.chatId ?? ""} ${entry.from ?? ""}`;
-		return haystack.toLowerCase().includes(needle);
+		return `${entry.target ?? ""} ${entry.summary ?? ""}`.toLowerCase().includes(needle);
 	});
 
 	const shown = hits.slice(-limit);
-	if (shown.length === 0) return kind === "sent" ? "No messages sent in that window." : "No dispatch entries in that window.";
+	if (shown.length === 0) return "No messages sent in that window.";
 
 	const lines = shown.map((entry) => {
 		const at = new Date(entry.at).toLocaleString();
-		if (kind === "sent") {
-			const failed = entry.error ? ` (failed: ${entry.error})` : "";
-			return `- ${at} · ${entry.tool} → ${entry.target}: ${entry.summary}${failed}`;
-		}
-		const parts = [`- ${at} · ${entry.chat} · ${entry.event}`];
-		if (entry.from) parts.push(`from ${entry.from}`);
-		if (entry.request) parts.push(`asked: ${entry.request}`);
-		if (entry.result) parts.push(`answered: ${entry.result}`);
-		if (entry.durationMs) parts.push(`${Math.round(entry.durationMs / 1000)} s`);
-		if (entry.detail) parts.push(entry.detail);
-		return parts.join(" · ");
+		const failed = entry.error ? ` (failed: ${entry.error})` : "";
+		return `- ${at} · ${entry.tool} → ${entry.target}: ${entry.summary}${failed}`;
 	});
 	const more = hits.length > shown.length ? `\n\n(${hits.length - shown.length} older entries not shown)` : "";
 	return lines.join("\n") + more;
@@ -117,15 +99,9 @@ export function renderHistory(entries: Record<string, any>[], params: HistoryPar
 export const teamsHistoryTool = {
 	name: "teams_history",
 	description:
-		"Look up what pi did in Teams across chats: kind 'sent' lists messages pi sent (from the audit log), kind " +
-		"'dispatch' lists requests the per-chat workers picked up and what they answered. Use it when someone asks " +
-		"what pi told another person or chat. Read-only.",
+		"Look up what pi sent in Teams across chats (from the audit log). Use it when someone asks what pi told " +
+		"another person or chat. Read-only.",
 	parameters: Type.Object({
-		kind: Type.Optional(
-			Type.Union([Type.Literal("sent"), Type.Literal("dispatch")], {
-				description: "'sent' (default): messages pi sent. 'dispatch': requests and answers of the chat workers.",
-			}),
-		),
 		chat: Type.Optional(Type.String({ description: "Only entries whose chat or person contains this text" })),
 		sinceHours: Type.Optional(Type.Number({ description: "How far back, in hours (default 24, max 2160)" })),
 		limit: Type.Optional(Type.Number({ description: "Most recent entries to show (default 20, max 200)" })),
@@ -140,11 +116,11 @@ export const teamsHistoryTool = {
 		ctx: ToolContext,
 	): Promise<ToolResult> {
 		return run(async () => {
-			const readers = ctx.connection?.watch.dispatch.historyReaders ?? [];
+			const readers = ctx.connection?.watch.historyReaders ?? [];
 			const refusal = historyRefusal(workerIdentity(), readers);
 			if (refusal) return errorResult(refusal);
 
-			const path = (params.kind ?? "sent") === "sent" ? getAuditPath() : getDispatchJournalPath(getAgentDir());
+			const path = getAuditPath();
 			const text = renderHistory(readJsonlTail(path), params);
 			return textResult(text, { path });
 		});

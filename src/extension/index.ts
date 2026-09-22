@@ -11,7 +11,6 @@ import { Box, Text } from "@earendil-works/pi-tui";
 
 import {
 	ensureConfigTemplate,
-	getAgentDir,
 	getConfigPath,
 	setWatchConfig,
 	type ResolvedMentionOnly,
@@ -35,14 +34,15 @@ import {
 	setActiveWatchLoop,
 	startWatchLoop,
 	stopActiveWatchLoop,
+	type WatchEvent as WakeEvent,
 	type WatchLoop,
 } from "../watch/loop.ts";
 import { composeWatchPrompt } from "../watch/prompt.ts";
 import { setChatReadState } from "../graph/chats.ts";
 import { claimWakePin, clearWakeTarget, pinViolation, queueWakePin } from "../watch/pin.ts";
-import { ChatDispatcher, excerpt } from "../watch/dispatch.ts";
-import { controlAction } from "../watch/control.ts";
-import { workerIdentity, workerViolation } from "../watch/worker.ts";
+import { commandText } from "../watch/control.ts";
+import { workerEnv, workerIdentity, workerViolation } from "../watch/worker.ts";
+import { matchesPattern } from "../config/scope.ts";
 import { withSenderAddresses } from "../watch/index.ts";
 import { readWatchCursor, writeWatchCursor } from "../watch/cursor.ts";
 
@@ -105,6 +105,48 @@ function mentionSummary(mentionOnly: ResolvedMentionOnly): string {
 	const overrides = mentionOnly.chats.length + mentionOnly.people.length;
 	const base = mentionOnly.default ? "mentions only" : "every message";
 	return overrides > 0 ? `${base} (${overrides} override${overrides === 1 ? "" : "s"})` : base;
+}
+
+/**
+ * The event-bus channel a lane router listens on (pi-lanes). Emitting on it is
+ * free when nobody listens, so pi-teams needs no dependency on the router.
+ */
+const LANE_HINT_CHANNEL = "pi-lanes:route";
+
+/** One line, at most `max` characters. */
+function oneLine(text: string | undefined, max = 160): string | undefined {
+	const flat = text?.replace(/\s+/g, " ").trim();
+	if (!flat) return undefined;
+	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/**
+ * The routing hint for one wake: which conversation it belongs to, and what
+ * the process that answers it must know about itself.
+ *
+ * - `lane` is the chat, per account: same chat, same lane and session.
+ * - `env` pins that process to the chat (../watch/worker.ts).
+ * - `command` is the newest message without mention and punctuation, so the
+ *   router can recognise "stopp" or "neues Thema".
+ * - `trusted` is true only in a one-to-one chat with a `historyReaders` entry:
+ *   the only place where looking at other conversations is allowed.
+ */
+export function laneHint(conn: TeamsConnection, event: WakeEvent, prompt: string) {
+	const message = withSenderAddresses(event.message, event.chat);
+	const oneOnOne = event.chat.chatType === "oneOnOne";
+	const address = message.from?.mail ?? message.from?.upn;
+	const peer = oneOnOne ? address : undefined;
+	const trusted = !!peer && conn.watch.historyReaders.some((pattern) => matchesPattern(pattern, peer));
+	return {
+		text: prompt,
+		lane: `teams:${conn.account}:${event.chat.id}`,
+		label: `Teams: ${event.chat.label}`,
+		env: workerEnv({ chatId: event.chat.id, label: event.chat.label, chatType: event.chat.chatType, peer }),
+		command: commandText(message, event.me?.displayName),
+		request: oneLine(message.text),
+		from: message.from?.displayName,
+		trusted,
+	};
 }
 
 /** Every tool, in the order they appear in the documentation. */
@@ -186,35 +228,10 @@ export default function (pi: ExtensionAPI) {
 	let watchSignature: string | undefined;
 
 	/**
-	 * Set when this process is a chat worker started by a dispatcher: it answers
-	 * one chat, never watches, and may write nowhere else (see ../watch/worker.ts).
+	 * Set when this process answers one chat only (a lane started for it, see
+	 * ../watch/worker.ts): it never watches, and may write nowhere else.
 	 */
 	const worker = workerIdentity();
-
-	/** The per-chat worker pool, in dispatch mode `process`. Created on the first wake. */
-	let dispatcher: ChatDispatcher | undefined;
-	/** The context the dispatcher reports problems to. */
-	let dispatchCtx: any;
-
-	const dispatcherFor = (conn: TeamsConnection, ctx: any): ChatDispatcher => {
-		dispatchCtx = ctx;
-		if (dispatcher) {
-			dispatcher.configure(conn.watch.dispatch);
-			return dispatcher;
-		}
-		dispatcher = new ChatDispatcher({
-			config: conn.watch.dispatch,
-			agentDir: getAgentDir(),
-			cwd: ctx?.cwd ?? process.cwd(),
-			onError: (message) => dispatchCtx?.ui?.notify?.(message, "warning"),
-		});
-		return dispatcher;
-	};
-
-	const stopDispatcher = () => {
-		dispatcher?.stopAll();
-		dispatcher = undefined;
-	};
 
 	/** The last polling error the user was told about, so it is said once. */
 	let reportedWatchError: string | undefined;
@@ -269,26 +286,16 @@ export default function (pi: ExtensionAPI) {
 				}
 				const prompt = composeWatchPrompt(event, event.me);
 
-				// Dispatch mode: the chat's own worker answers, in parallel with other chats.
-				if (conn.watch.dispatch.mode === "process") {
-					const message = withSenderAddresses(event.message, event.chat);
-					dispatcherFor(conn, ctx).deliver({
-						chatId: event.chat.id,
-						label: event.chat.label,
-						chatType: event.chat.chatType,
-						from: message.from?.displayName,
-						peer: message.from?.mail ?? message.from?.upn,
-						prompt,
-						request: excerpt(message.text),
-						control: controlAction(message, conn.watch.dispatch, event.me?.displayName),
-					});
-					return;
-				}
+				// Tell a router which conversation this prompt belongs to. With
+				// pi-lanes installed, every chat is answered by a pi process of its
+				// own, in parallel with the others; without it nobody listens and the
+				// prompt takes the usual way into this session.
+				pi.events.emit(LANE_HINT_CHANNEL, laneHint(conn, event, prompt));
 
-				// Session mode: the turn this prompt starts may only answer the chat
-				// that woke pi. The pin is taken when the prompt enters the transcript,
-				// not now: while pi is busy the prompt waits in the queue, and pinning
-				// here would take the pin away from the answer still being written.
+				// The turn this prompt starts may only answer the chat that woke pi.
+				// The pin is taken when the prompt enters the transcript, not now:
+				// while pi is busy the prompt waits in the queue, and pinning here
+				// would take the pin away from the answer still being written.
 				queueWakePin(prompt, event.chat.id, event.chat.label);
 				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 			},
@@ -441,35 +448,7 @@ export default function (pi: ExtensionAPI) {
 					conn.watch.from.length > 0 ? `people: ${conn.watch.from.join(", ")}` : "any sender",
 					mentionSummary(conn.watch.mentionOnly),
 					runtime ? `${runtime.wakesThisHour} wake(s) this hour` : "not running in this session",
-					conn.watch.dispatch.mode === "process"
-						? `one process per chat (${dispatcher?.status().busy ?? 0}/${conn.watch.dispatch.maxConcurrent} busy)`
-						: "answers in this session",
 				].join(" · "),
-				"info",
-			);
-		},
-	});
-
-	pi.registerCommand("teams-dispatch", {
-		description: "Show the per-chat workers of listen mode (dispatch mode process)",
-		handler: async (_args, ctx) => {
-			const conn = refresh();
-			if (!conn || conn.watch.dispatch.mode !== "process") {
-				ctx.ui.notify("Teams dispatch: off. Every wake is a turn in this session (watch.dispatch.mode).", "info");
-				return;
-			}
-			const status = dispatcher?.status();
-			if (!status || status.alive + status.queued === 0) {
-				ctx.ui.notify(`Teams dispatch: no worker running (max ${conn.watch.dispatch.maxConcurrent} in parallel).`, "info");
-				return;
-			}
-			const minutes = (ms: number) => `${Math.max(0, Math.round(ms / 60_000))} min`;
-			ctx.ui.notify(
-				[
-					`Teams dispatch: ${status.busy}/${status.maxConcurrent} busy, ${status.alive} alive, ${status.queued} waiting`,
-					...status.chats.map((c) => `- ${c.label}: ${c.busy ? `working for ${minutes(c.sinceMs)}` : `idle for ${minutes(c.sinceMs)}`}`),
-					...status.waiting.map((c) => `- ${c.label}: waiting for a slot`),
-				].join("\n"),
 				"info",
 			);
 		},
@@ -541,9 +520,10 @@ export default function (pi: ExtensionAPI) {
 		// and the same config: autoStart there would run a second watcher that
 		// answers chats inside a throwaway process and advances the shared cursor,
 		// so the real session never sees those messages.
-		// A chat worker (--mode rpc, so hasUI is true) is excluded by name: it is
-		// started by the watcher and must never become one.
-		if (connection.watch.autoStart && ctx.hasUI && !worker) startWatch(ctx, { explicit: true });
+		// A pi driven over RPC (a lane, an IDE) has a UI too, but nobody is
+		// typing in it: only the terminal session listens on its own.
+		const interactive = (ctx.mode ?? (ctx.hasUI ? "tui" : "print")) === "tui";
+		if (connection.watch.autoStart && interactive && !worker) startWatch(ctx, { explicit: true });
 
 		paintStatus(ctx);
 
@@ -602,8 +582,6 @@ export default function (pi: ExtensionAPI) {
 		// The timer would be unref'd anyway, but a poll in flight during shutdown
 		// would still be a Graph call for a session that is gone.
 		stopWatch();
-		// Workers end with the session that started them; their sessions stay on disk.
-		stopDispatcher();
 	});
 
 	// A queued wake prompt has entered the transcript: its turn starts now, so
@@ -706,7 +684,6 @@ export default function (pi: ExtensionAPI) {
 			// A watcher polling a session that was just removed only produces
 			// errors; leaving it running would be noise, not service.
 			stopWatch();
-			stopDispatcher();
 		} else if (WATCH_CONFIG_TOOLS.has(event.toolName)) {
 			// Only `enable` is a decision. A status call, or a re-read after
 			// teams_setup, may stop the loop but never start it.

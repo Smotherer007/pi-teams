@@ -136,69 +136,12 @@ export interface WatchConfig {
 	/** Hard cap on wakes per hour, across all chats (default: 10) */
 	maxTriggersPerHour?: number;
 	/**
-	 * How a wake reaches a model. See `DispatchConfig`. Absent means the
-	 * classic behaviour: every wake is a turn in this pi session.
-	 */
-	dispatch?: DispatchConfig;
-}
-
-/**
- * Where the answer to a wake is worked out.
- *
- * `session` (default) queues every wake as a follow-up in the pi session that
- * runs the watcher. One chat at a time: while pi works on one request, every
- * other chat waits.
- *
- * `process` gives every chat a pi process of its own (`pi --mode rpc`), with a
- * session of its own that carries on from message to message. Different chats
- * are answered in parallel; messages in the same chat stay in order, and one
- * that arrives while the worker is busy is steered into the running turn. The
- * watching session itself only routes.
- */
-export interface DispatchConfig {
-	/** "session" (default) or "process" */
-	mode?: DispatchMode;
-	/** Chats worked on at the same time (default: 3, 1-16) */
-	maxConcurrent?: number;
-	/** Worker processes kept alive, busy or idle (default: 6, at least maxConcurrent, max 32) */
-	maxWorkers?: number;
-	/** An idle worker exits after this many minutes; its session stays (default: 30) */
-	idleMinutes?: number;
-	/**
-	 * A chat quiet for longer than this starts a fresh session instead of
-	 * continuing the last one (default: 72, 0 = always continue).
-	 */
-	freshAfterHours?: number;
-	/** The pi executable (default: "pi") */
-	command?: string;
-	/** Extra arguments for every worker, e.g. ["--model", "provider/id"] */
-	args?: string[];
-	/** A message consisting of one of these aborts the running work (case-insensitive) */
-	stopWords?: string[];
-	/** A message consisting of one of these starts a fresh session for the chat */
-	resetWords?: string[];
-	/**
 	 * People who may, from their one-to-one chat with pi, read what pi wrote in
-	 * other chats (`teams_history`). Matched like `from`. Empty means nobody;
-	 * the watching session itself is never restricted.
+	 * other chats (`teams_history`). Matched like `from`. Empty means nobody.
+	 * Only matters where a pi process answers a single chat, e.g. a lane run by
+	 * pi-lanes; the session a person types in is never restricted.
 	 */
 	historyReaders?: string[];
-}
-
-export type DispatchMode = "session" | "process";
-
-/** A dispatch config after every default and clamp has been applied. */
-export interface ResolvedDispatchConfig {
-	mode: DispatchMode;
-	maxConcurrent: number;
-	maxWorkers: number;
-	idleMinutes: number;
-	freshAfterHours: number;
-	command: string;
-	args: string[];
-	stopWords: string[];
-	resetWords: string[];
-	historyReaders: string[];
 }
 
 /**
@@ -253,7 +196,7 @@ export interface ResolvedWatchConfig {
 	mentionOnly: ResolvedMentionOnly;
 	cooldownSeconds: number;
 	maxTriggersPerHour: number;
-	dispatch: ResolvedDispatchConfig;
+	historyReaders: string[];
 }
 
 /**
@@ -449,25 +392,7 @@ export const WATCH_DEFAULTS: ResolvedWatchConfig = {
 	mentionOnly: { default: false, chats: [], people: [] },
 	cooldownSeconds: 300,
 	maxTriggersPerHour: 10,
-	dispatch: {
-		mode: "session",
-		maxConcurrent: 3,
-		maxWorkers: 6,
-		idleMinutes: 30,
-		freshAfterHours: 72,
-		command: "pi",
-		args: [],
-		stopWords: ["stop", "stopp", "abbrechen", "abbruch", "cancel"],
-		resetWords: ["neues thema", "new topic", "reset"],
-		historyReaders: [],
-	},
-};
-
-const DISPATCH_BOUNDS = {
-	maxConcurrent: { min: 1, max: 16 },
-	maxWorkers: { min: 1, max: 32 },
-	idleMinutes: { min: 1, max: 1440 },
-	freshAfterHours: { min: 0, max: 8760 },
+	historyReaders: [],
 };
 
 /**
@@ -886,36 +811,7 @@ export function resolveWatchConfig(
 			WATCH_BOUNDS.maxTriggersPerHour,
 			WATCH_DEFAULTS.maxTriggersPerHour,
 		),
-		dispatch: resolveDispatchConfig(pick("dispatch")),
-	};
-}
-
-/**
- * Normalise the dispatch settings. Exported for tests.
- *
- * `maxWorkers` is raised to `maxConcurrent` when set lower: a worker that is
- * busy is alive, so fewer live workers than parallel chats is not a limit but
- * a contradiction.
- */
-export function resolveDispatchConfig(value: DispatchConfig | undefined): ResolvedDispatchConfig {
-	const d = WATCH_DEFAULTS.dispatch;
-	const v = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-	const words = (list: unknown, fallback: string[]): string[] =>
-		Array.isArray(list)
-			? list.filter((w): w is string => typeof w === "string" && w.trim() !== "").map((w) => w.trim().toLowerCase())
-			: fallback;
-	const maxConcurrent = clamp(v.maxConcurrent, DISPATCH_BOUNDS.maxConcurrent, d.maxConcurrent);
-	return {
-		mode: v.mode === "process" ? "process" : "session",
-		maxConcurrent,
-		maxWorkers: Math.max(maxConcurrent, clamp(v.maxWorkers, DISPATCH_BOUNDS.maxWorkers, d.maxWorkers)),
-		idleMinutes: clamp(v.idleMinutes, DISPATCH_BOUNDS.idleMinutes, d.idleMinutes),
-		freshAfterHours: clamp(v.freshAfterHours, DISPATCH_BOUNDS.freshAfterHours, d.freshAfterHours),
-		command: typeof v.command === "string" && v.command.trim() ? v.command.trim() : d.command,
-		args: Array.isArray(v.args) ? v.args.filter((a): a is string => typeof a === "string") : [...d.args],
-		stopWords: words(v.stopWords, d.stopWords),
-		resetWords: words(v.resetWords, d.resetWords),
-		historyReaders: normalizePatterns(v.historyReaders),
+		historyReaders: normalizePatterns(pick("historyReaders")),
 	};
 }
 

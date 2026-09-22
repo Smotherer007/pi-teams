@@ -1,14 +1,15 @@
 /**
  * Listen mode — who a chat worker is.
  *
- * In dispatch mode (`watch.dispatch.mode: "process"`) every chat that wakes pi
- * gets a pi process of its own. That process loads this extension like any
- * other, so it has to know two things the moment it starts: that it must never
- * run a watcher of its own, and which single chat it may write to.
+ * Where a chat is answered by a pi process of its own (a lane, e.g. with
+ * pi-lanes), that process loads this extension like any other, so it has to
+ * know two things the moment it starts: that it must never run a watcher of
+ * its own, and which single chat it may write to.
  *
- * Both travel in the environment, set by the dispatcher when it spawns the
- * worker. An environment variable is the one channel that exists before the
- * first line of the extension runs, and the model cannot change it.
+ * Both travel in the environment, set by the router that starts the lane (see
+ * `laneHint` in ../extension/index.ts). An environment variable is the one
+ * channel that exists before the first line of the extension runs, and the
+ * model cannot change it.
  */
 
 /** Environment variables a chat worker is started with. */
