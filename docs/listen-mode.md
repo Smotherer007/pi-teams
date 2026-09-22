@@ -186,3 +186,11 @@ and renews it every 5 minutes for 15 minutes at a time. You show as
 **Available**, or as whatever you picked with `teams_set_presence`. When the
 watcher stops, pi clears the session and you drop back to Offline straight away
 (at the latest 15 minutes after pi was killed).
+
+## "Seen" as soon as pi picks a message up
+
+When a message wakes pi, the chat is marked read right away — before the answer
+is written. With read receipts on in the tenant, the sender sees the "seen" eye
+under their message and knows a reply is coming. A real typing indicator
+("…") is not possible: Microsoft Graph has no typing API for user accounts,
+only the Bot Framework has one for bots.

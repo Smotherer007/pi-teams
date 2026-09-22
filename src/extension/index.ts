@@ -37,6 +37,7 @@ import {
 	type WatchLoop,
 } from "../watch/loop.ts";
 import { composeWatchPrompt } from "../watch/prompt.ts";
+import { setChatReadState } from "../graph/chats.ts";
 import { clearWakeTarget, pinViolation, pinWakeTarget } from "../watch/pin.ts";
 import { readWatchCursor, writeWatchCursor } from "../watch/cursor.ts";
 
@@ -225,6 +226,13 @@ export default function (pi: ExtensionAPI) {
 				// answer the chat that woke pi, and the message it is about to read
 				// was written by somebody else.
 				pinWakeTarget(event.chat.id, event.chat.label);
+				// Mark the chat read the moment pi picks it up: with read receipts on,
+				// the sender sees the "seen" eye right away — the closest thing to a
+				// typing indicator Graph offers (there is no typing API for users).
+				// Fire-and-forget: a failed receipt must not hold up the answer.
+				if (event.me?.id) {
+					void setChatReadState(conn, event.chat.id, event.me, true).catch(() => undefined);
+				}
 				pi.sendUserMessage(composeWatchPrompt(event, event.me), { deliverAs: "followUp" });
 			},
 			onTick: (status) => {
