@@ -290,3 +290,52 @@ describe("runWatchTick without an identity", () => {
 		assert.equal(result.wakes.length, 0);
 	});
 });
+
+describe("runWatchTick — address rules in `from` (*@domain)", () => {
+	// Graph sends a message's sender as id + display name only. A rule like
+	// `*@neoimpulse.de` never matched anyone until the address was filled in.
+	const byDomain = () => watch({ from: ["*@neoimpulse.de"] });
+
+	test("the address comes from the chat's member list", async () => {
+		const h = harness({
+			watch: byDomain(),
+			chats: [
+				chat({
+					members: [{ id: "tolga-1", displayName: "Tolga Barlak", mail: "tolga@neoimpulse.de" }],
+				}),
+			],
+		});
+		const result = await tick(h);
+		assert.equal(result.wakes.length, 1);
+		assert.equal(result.wakes[0]!.message.from?.mail, "tolga@neoimpulse.de");
+	});
+
+	test("without a member address, the directory lookup fills it in", async () => {
+		const h = harness({ watch: byDomain() });
+		const looked: string[] = [];
+		h.deps.lookupAddresses = async (id) => {
+			looked.push(id);
+			return { upn: "tolga@neoimpulse.de" };
+		};
+		const result = await tick(h);
+		assert.deepEqual(looked, ["tolga-1"]);
+		assert.equal(result.wakes.length, 1);
+	});
+
+	test("a sender from another domain still does not wake pi", async () => {
+		const h = harness({ watch: byDomain() });
+		h.deps.lookupAddresses = async () => ({ upn: "someone@example.com" });
+		const result = await tick(h);
+		assert.equal(result.wakes.length, 0);
+	});
+
+	test("a failing lookup is not an error — the rule just does not match", async () => {
+		const h = harness({ watch: byDomain() });
+		h.deps.lookupAddresses = async () => {
+			throw new Error("403");
+		};
+		const result = await tick(h);
+		assert.equal(result.wakes.length, 0);
+		assert.equal(result.examined, 1);
+	});
+});

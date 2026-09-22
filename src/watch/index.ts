@@ -238,6 +238,34 @@ export function isWatchedChat(chat: ChatSummary, watch: ResolvedWatchConfig): bo
 // ---------------------------------------------------------------------------
 
 /**
+ * The sender of a message, with the addresses Graph left out filled in.
+ *
+ * `chatMessage.from.user` carries only id and display name — no UPN, no mail —
+ * so a listen rule like `*@contoso.com` could never match a sender. The chat's
+ * member list does carry the mail address, so the sender is looked up there
+ * first (by user id, else by display name).
+ */
+export function withSenderAddresses(message: MessageSummary, chat: ChatSummary): MessageSummary {
+	const sender = message.from;
+	if (!sender || (sender.upn && sender.mail)) return message;
+
+	const member =
+		(sender.id ? chat.members.find((m) => m.id === sender.id) : undefined) ??
+		chat.members.find((m) => m.displayName === sender.displayName);
+	if (!member || (!member.upn && !member.mail)) return message;
+
+	return {
+		...message,
+		from: { ...sender, upn: sender.upn ?? member.upn, mail: sender.mail ?? member.mail },
+	};
+}
+
+/** Does the sender carry an address a rule could match on? */
+export function senderHasAddress(message: MessageSummary): boolean {
+	return !!(message.from?.upn || message.from?.mail);
+}
+
+/**
  * Does the sender fall inside the configured listen list?
  *
  * `chats` says where pi listens, this says to whom — the person filter is what

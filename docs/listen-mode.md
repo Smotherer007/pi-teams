@@ -46,7 +46,7 @@ never sees.
 | `autoStart` | `false` | whether a session with a UI may start the watcher without being asked |
 | `intervalSeconds` | `60` | seconds between polls (minimum 15) |
 | `chats` | `[]` | **where** pi listens: glob patterns matched against topic, label, chat ID and participant names. Empty means every recent chat. |
-| `from` | `[]` | **who** pi listens to: glob patterns matched against display name, UPN and e-mail. Empty means any sender. |
+| `from` | `[]` | **who** pi listens to: glob patterns matched against display name, UPN and e-mail — so `*@contoso.com` covers a whole domain. Graph sends a sender without address; pi fills it in from the chat's member list or the directory. Empty means any sender. |
 | `mentionOnly` | `false` | whether a message has to address you: `true`/`false`, or `{ default, chats, people }` for overrides. See [below](#who-has-to-address-pi). |
 | `cooldownSeconds` | `300` | stay quiet in a chat after waking pi for it |
 | `maxTriggersPerHour` | `10` | hard cap on wakes per hour |

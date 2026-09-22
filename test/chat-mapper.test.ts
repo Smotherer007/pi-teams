@@ -53,3 +53,17 @@ describe("mapChat activity timestamp", () => {
 		assert.equal(mapChat(rawChat(), ME).lastUpdated, undefined);
 	});
 });
+
+describe("mapPerson — chat members", () => {
+	test("a member's person id is its userId, not the membership id", async () => {
+		const { mapPerson } = await import("../src/graph/mappers.ts");
+		const person = mapPerson({
+			id: "MCMjMSMjdGVuYW50",
+			userId: "user-42",
+			displayName: "Anna Schmidt",
+			email: "anna@contoso.com",
+		} as never);
+		assert.equal(person?.id, "user-42");
+		assert.equal(person?.mail, "anna@contoso.com");
+	});
+});

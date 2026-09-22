@@ -37,13 +37,16 @@ import {
 	noteWake,
 	openMessages,
 	pruneState,
+	senderHasAddress,
 	settleChat,
 	shouldWake,
 	waitingCount,
 	wakesThisHour,
 	WATCH_MESSAGE_WINDOW,
+	withSenderAddresses,
 	type WatchState,
 } from "./index.ts";
+import { getUserAddresses } from "../graph/me.ts";
 
 // ---------------------------------------------------------------------------
 // Events and status
@@ -145,6 +148,12 @@ export interface WatchTickDeps {
 	 * this chat": without it a restart replays what was already answered.
 	 */
 	persistCursor?: (seen: ReadonlyMap<string, string>) => void;
+	/**
+	 * UPN and mail of a user by id, for senders the chat's member list could not
+	 * fill in. Without an address, a listen rule like `*@contoso.com` cannot
+	 * match. Optional; a failure leaves the sender as it was.
+	 */
+	lookupAddresses?: (userId: string) => Promise<{ upn?: string; mail?: string }>;
 }
 
 export interface WatchTickResult {
@@ -157,6 +166,13 @@ export interface WatchTickResult {
 	/** Of the examined ones, how many were only postponed */
 	deferred: number;
 	wakes: WatchEvent[];
+}
+
+function definedOnly(value: { upn?: string; mail?: string }): { upn?: string; mail?: string } {
+	const out: { upn?: string; mail?: string } = {};
+	if (value.upn) out.upn = value.upn;
+	if (value.mail) out.mail = value.mail;
+	return out;
 }
 
 /**
@@ -237,10 +253,22 @@ export async function runWatchTick(
 
 		noteSuccess(state, chat.id);
 
-		const message = messages.find((entry) => !entry.deletedDateTime) ?? messages[0];
-		if (!message) {
+		const newest = messages.find((entry) => !entry.deletedDateTime) ?? messages[0];
+		if (!newest) {
 			settleChat(state, chat.id, marker);
 			continue;
+		}
+
+		// Graph sends the sender without UPN or mail; fill them in so address
+		// rules (`*@contoso.com`) in `from` and `mentionOnly.people` can match.
+		let message = withSenderAddresses(newest, chat);
+		if (!senderHasAddress(message) && message.from?.id && deps.lookupAddresses) {
+			try {
+				const found = await deps.lookupAddresses(message.from.id);
+				message = { ...message, from: { ...message.from, ...definedOnly(found) } };
+			} catch {
+				/* no address: the rule is matched on name and id alone, as before */
+			}
 		}
 
 		const decision = shouldWake(chat, message, me, watch, state, now);
@@ -371,6 +399,18 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 	 */
 	let me: SignedInUser | undefined;
 	let failureCount = 0;
+	/** Sender addresses by user id — people rarely change their UPN mid-session. */
+	const addressCache = new Map<string, Promise<{ upn?: string; mail?: string }>>();
+	const lookupAddresses = (userId: string) => {
+		let hit = addressCache.get(userId);
+		if (!hit) {
+			hit = getUserAddresses(connection, userId);
+			// A failed lookup is retried next time instead of being cached.
+			hit.catch(() => addressCache.delete(userId));
+			addressCache.set(userId, hit);
+		}
+		return hit;
+	};
 	const presence =
 		options.presence === undefined
 			? presenceKeeperFor(connection, options.onError)
@@ -416,6 +456,7 @@ export function startWatchLoop(options: WatchLoopOptions): WatchLoop {
 					now: () => Date.now(),
 					allowed: (chat) => hasAccess(connection, "read", "chats", chatCandidates(chat)),
 					persistCursor: options.persistCursor,
+					lookupAddresses,
 				},
 				state,
 				watch,

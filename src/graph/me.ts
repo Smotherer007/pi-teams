@@ -21,6 +21,26 @@ export async function getMe(conn: TeamsConnection, signal?: AbortSignal): Promis
 }
 
 /**
+ * UPN and mail of one user, by object id.
+ *
+ * A chat message's sender carries only id and display name, so a listen rule
+ * like `*@contoso.com` has nothing to match against without this lookup.
+ */
+export async function getUserAddresses(
+	conn: TeamsConnection,
+	userId: string,
+	signal?: AbortSignal,
+): Promise<{ upn?: string; mail?: string }> {
+	const raw = await graphRequest<Record<string, string | null | undefined>>(
+		conn,
+		"GET",
+		`/users/${encodeURIComponent(userId)}`,
+		{ query: { $select: "userPrincipalName,mail" }, signal },
+	);
+	return { upn: raw?.userPrincipalName ?? undefined, mail: raw?.mail ?? undefined };
+}
+
+/**
  * Find people by name, UPN or e-mail.
  *
  * Graph's `$filter startsWith` is the only broadly available option here:

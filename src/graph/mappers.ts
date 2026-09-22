@@ -52,7 +52,8 @@ export function mapPerson(raw: Raw | undefined): PersonRef | undefined {
 	const name = identity.displayName ?? identity.userPrincipalName ?? identity.email;
 	if (!name && !identity.id) return undefined;
 	return {
-		id: identity.id ?? undefined,
+		// A chat member's `id` is the *membership* id; the person is `userId`.
+		id: identity.userId ?? identity.id ?? undefined,
 		displayName: name ?? "(unknown)",
 		upn: identity.userPrincipalName ?? undefined,
 		mail: identity.email ?? identity.mail ?? undefined,
