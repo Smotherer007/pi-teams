@@ -29,12 +29,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@azure/msal-node": "^6.0.0",
-    "typebox": ">=1.0.0"
+    "@azure/msal-node": "^6.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.70.0",
-    "typebox": ">=1.0.0"
+    "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",
@@ -42,7 +41,8 @@
     "@semantic-release/git": "^10.0.0",
     "@types/node": "^22.0.0",
     "semantic-release": "^25.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "typebox": ">=1.0.0"
   },
   "publishConfig": {
     "access": "public"
